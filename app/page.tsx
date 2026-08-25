@@ -1,125 +1,182 @@
-"client"; // agar page boshida client directive bo'lsa saqlang, yo'qsa shundoq tashlang
+"use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 
-export default function Home() {
+export default function LaborantPage() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-  const [fileName, setFileName] = useState<string>("");
+  const [downloadName, setDownloadName] = useState("");
+  const [error, setError] = useState("");
+  const [isDragging, setIsDragging] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
+      setError("");
       setDownloadUrl(null);
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Drag & Drop (Faylni sudrab kelib tashlash) hodisalari
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    if (!file) return;
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const droppedFile = e.dataTransfer.files[0];
+      if (droppedFile.name.endsWith(".docx")) {
+        setFile(droppedFile);
+        setError("");
+        setDownloadUrl(null);
+      } else {
+        setError("Faqat .docx formatidagi Word fayllarini yuklashingiz mumkin!");
+      }
+    }
+  };
+
+  const handleProcess = async () => {
+    if (!file) {
+      setError("Iltimos, avval laboratoriya faylini yuklang!");
+      return;
+    }
 
     setLoading(true);
+    setError("");
     setDownloadUrl(null);
 
     const formData = new FormData();
     formData.append("file", file);
 
     try {
-      const response = await fetch("/api/analyze", {
+      const response = await fetch("/api/process-lab", {
         method: "POST",
         body: formData,
       });
 
       if (!response.ok) {
         const errData = await response.json();
-        alert(errData.error || "Xatolik yuz berdi");
-        setLoading(false);
-        return;
+        throw new Error(errData.error || "Tahlil qilishda xatolik yuz berdi");
       }
 
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       setDownloadUrl(url);
-      setFileName(`TAHLIL_${file.name}`);
-    } catch (err) {
-      alert("Tarmoqda xatolik yuz berdi");
+      setDownloadName(`TAHLIL_${file.name}`);
+    } catch (err: any) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <main style={{ minHeight: "100vh", backgroundColor: "#f3f4f6", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "20px", fontFamily: "sans-serif" }}>
-      <div style={{ backgroundColor: "white", padding: "40px", borderRadius: "12px", boxShadow: "0 4px 6px rgba(0,0,0,0.1)", width: "100%", maxWidth: "600px", textAlign: "center" }}>
+    <div style={{ maxWidth: "650px", margin: "60px auto", fontFamily: "sans-serif", padding: "0 20px" }}>
+      <div style={{ textAlign: "center", marginBottom: "30px" }}>
+        <h1 style={{ color: "#0f172a", marginBottom: "8px" }}>🩺 Laboratoriya AI Tahlil Tizimi</h1>
+        <p style={{ color: "#64748b", margin: 0 }}>Faylni yuklang, AI tahlil qo'shilgan tayyor hujjatni bemorga yuboring</p>
+      </div>
+
+      <div
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        style={{
+          background: isDragging ? "#eff6ff" : "#ffffff",
+          border: isDragging ? "2px dashed #2563eb" : "2px dashed #cbd5e1",
+          borderRadius: "16px",
+          padding: "40px 20px",
+          textAlign: "center",
+          transition: "all 0.2s ease",
+        }}
+      >
+        <input
+          type="file"
+          accept=".docx"
+          id="fileInput"
+          onChange={handleFileChange}
+          style={{ display: "none" }}
+        />
+        <label
+          htmlFor="fileInput"
+          style={{
+            display: "inline-block",
+            padding: "12px 24px",
+            background: "#f1f5f9",
+            borderRadius: "8px",
+            cursor: "pointer",
+            fontWeight: "600",
+            color: "#334155",
+            marginBottom: "8px",
+          }}
+        >
+          📁 Faylni tanlash (.docx)
+        </label>
         
-        <h1 style={{ fontSize: "24px", fontWeight: "bold", color: "#111827", marginBottom: "8px" }}>
-          Laboratoriya AI Tahlil Tizimi
-        </h1>
-        <p style={{ color: "#6b7280", fontSize: "14px", marginBottom: "30px" }}>
-          Faylni yuklang, AI tahlil qo'shilgan tayyor hujjatni bemorga yuboring
+        <p style={{ color: "#94a3b8", fontSize: "14px", margin: "8px 0" }}>
+          yoki faylni shu yerga sudrab kelib tashlang
         </p>
 
-        <form onSubmit={handleSubmit}>
-          <div style={{ border: "2px dashed #d1d5db", borderRadius: "8px", padding: "30px", marginBottom: "20px", backgroundColor: "#f9fafb" }}>
-            <label style={{ display: "inline-block", padding: "10px 20px", backgroundColor: "#e5e7eb", color: "#374151", borderRadius: "6px", cursor: "pointer", fontWeight: "600", fontSize: "14px" }}>
-              Faylni tanlash (.docx)
-              <input type="file" accept=".docx" onChange={handleFileChange} style={{ display: "none" }} />
-            </label>
-            <p style={{ color: "#9ca3af", fontSize: "12px", marginTop: "10px" }}>
-              yoki faylni shu yerga sudrab kelib tashlang
-            </p>
-            {file && (
-              <p style={{ color: "#2563eb", fontSize: "14px", fontWeight: "600", marginTop: "10px" }}>
-                Tanlandi: {file.name}
-              </p>
-            )}
-          </div>
+        {file && <p style={{ color: "#2563eb", fontWeight: "600", marginTop: "12px" }}>Tanlandi: {file.name}</p>}
 
+        <div style={{ marginTop: "20px" }}>
           <button
-            type="submit"
-            disabled={!file || loading}
+            onClick={handleProcess}
+            disabled={loading || !file}
             style={{
               width: "100%",
-              padding: "12px",
-              backgroundColor: !file || loading ? "#9ca3af" : "#2563eb",
-              color: "white",
+              padding: "14px",
+              background: loading ? "#94a3b8" : "#2563eb",
+              color: "#fff",
               border: "none",
-              borderRadius: "6px",
+              borderRadius: "10px",
               fontSize: "16px",
-              fontWeight: "600",
-              cursor: !file || loading ? "not-allowed" : "pointer",
+              fontWeight: "bold",
+              cursor: loading || !file ? "not-allowed" : "pointer",
             }}
           >
-            {loading ? "Tahlil qilinmoqda va tayyorlanmoqda..." : "Tahlil qilish va Faylni Tayyorlash"}
+            {loading ? "Gemini AI tahlil qilmoqda..." : "🚀 Tahlil qilish va Faylni Tayyorlash"}
           </button>
-        </form>
-
-        {downloadUrl && (
-          <div style={{ marginTop: "30px", padding: "20px", backgroundColor: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: "8px" }}>
-            <p style={{ color: "#065f46", fontSize: "14px", fontWeight: "600", marginBottom: "15px" }}>
-              Fayl tayyorlandi!
-            </p>
-            <a
-              href={downloadUrl}
-              download={fileName}
-              style={{
-                display: "inline-block",
-                padding: "10px 20px",
-                backgroundColor: "#059669",
-                color: "white",
-                borderRadius: "6px",
-                textDecoration: "none",
-                fontWeight: "600",
-                fontSize: "14px",
-              }}
-            >
-              Tayyor! Faylni Yuklab Olish
-            </a>
-          </div>
-        )}
-
+        </div>
       </div>
-    </main>
+
+      {error && (
+        <div style={{ background: "#fef2f2", color: "#dc2626", padding: "14px", borderRadius: "10px", marginTop: "20px" }}>
+          ⚠️ {error}
+        </div>
+      )}
+
+      {downloadUrl && (
+        <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", padding: "20px", borderRadius: "12px", marginTop: "24px", textAlign: "center" }}>
+          <p style={{ color: "#166534", fontWeight: "bold", marginBottom: "12px" }}>
+            ✅ Fayl tayyorlandi! Gemini AI xulosasi fayl oxiriga biriktirildi.
+          </p>
+          <a
+            href={downloadUrl}
+            download={downloadName}
+            style={{
+              display: "inline-block",
+              padding: "12px 28px",
+              background: "#16a34a",
+              color: "#fff",
+              textDecoration: "none",
+              borderRadius: "8px",
+              fontWeight: "bold",
+            }}
+          >
+            📥 Tayyor Faylni Yuklab Olish (Bemor uchun)
+          </a>
+        </div>
+      )}
+    </div>
   );
 }
