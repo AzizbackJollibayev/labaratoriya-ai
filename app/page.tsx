@@ -82,7 +82,7 @@ export default function LaborantPage() {
   return (
     <div style={{ maxWidth: "650px", margin: "60px auto", fontFamily: "sans-serif", padding: "0 20px" }}>
       <div style={{ textAlign: "center", marginBottom: "30px" }}>
-        <h1 style={{ color: "#0f172a", marginBottom: "8px" }}>🩺 Laboratoriya AI Tahlil Tizimi</h1>
+        <h1 style={{ color: "#0f172a", marginBottom: "8px" }}> Laboratoriya AI Tahlil Tizimi</h1>
         <p style={{ color: "#64748b", margin: 0 }}>Faylni yuklang, AI tahlil qo'shilgan tayyor hujjatni bemorga yuboring</p>
       </div>
 
@@ -119,7 +119,7 @@ export default function LaborantPage() {
             marginBottom: "8px",
           }}
         >
-          📁 Faylni tanlash (.docx)
+          Faylni tanlash (.docx)
         </label>
         
         <p style={{ color: "#94a3b8", fontSize: "14px", margin: "8px 0" }}>
@@ -144,21 +144,21 @@ export default function LaborantPage() {
               cursor: loading || !file ? "not-allowed" : "pointer",
             }}
           >
-            {loading ? "Gemini AI tahlil qilmoqda..." : "🚀 Tahlil qilish va Faylni Tayyorlash"}
+            {loading ? "Tahlil qilish!"}
           </button>
         </div>
       </div>
 
       {error && (
         <div style={{ background: "#fef2f2", color: "#dc2626", padding: "14px", borderRadius: "10px", marginTop: "20px" }}>
-          ⚠️ {error}
+           {error}
         </div>
       )}
 
       {downloadUrl && (
         <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", padding: "20px", borderRadius: "12px", marginTop: "24px", textAlign: "center" }}>
           <p style={{ color: "#166534", fontWeight: "bold", marginBottom: "12px" }}>
-            ✅ Fayl tayyorlandi! Gemini AI xulosasi fayl oxiriga biriktirildi.
+            Fayl tayyorlandi!
           </p>
           <a
             href={downloadUrl}
@@ -173,7 +173,7 @@ export default function LaborantPage() {
               fontWeight: "bold",
             }}
           >
-            📥 Tayyor Faylni Yuklab Olish (Bemor uchun)
+            Tayyor! Faylni Yuklab Olish.
           </a>
         </div>
       )}
