@@ -98,7 +98,7 @@ export default function Home() {
         {downloadUrl && (
           <div style={{ marginTop: "30px", padding: "20px", backgroundColor: "#ecfdf5", border: "1px solid #a7f3d0", borderRadius: "8px" }}>
             <p style={{ color: "#065f46", fontSize: "14px", fontWeight: "600", marginBottom: "15px" }}>
-              Fayl tayyorlandi! Gemini AI xulosasi fayl oxiriga biriktirildi.
+              Fayl tayyorlandi!
             </p>
             <a
               href={downloadUrl}
@@ -114,7 +114,7 @@ export default function Home() {
                 fontSize: "14px",
               }}
             >
-              Tayyor Faylni Yuklab Olish (Bemor uchun)
+              Tayyor! Faylni Yuklab Olish
             </a>
           </div>
         )}
