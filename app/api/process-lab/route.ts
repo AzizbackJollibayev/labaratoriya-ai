@@ -74,12 +74,16 @@ function isOverloadError(err: any): boolean {
   const status = err?.status ?? err?.response?.status;
   const message = String(err?.message || "").toLowerCase();
   return (
-    status === 429 || // Too Many Requests
-    status === 503 || // Service Unavailable / overloaded
+    status === 429 ||
+    status === 503 ||
     message.includes("overloaded") ||
     message.includes("resource_exhausted") ||
     message.includes("unavailable") ||
-    message.includes("service is currently unavailable")
+    message.includes("service is currently unavailable") ||
+    message.includes("too many requests") ||
+    message.includes("quota") ||
+    message.includes("429") ||
+    message.includes("503")
   );
 }
 
@@ -157,11 +161,24 @@ export async function POST(req: NextRequest) {
 
     const prompt = `Quyidagi laboratoriya tahlil natijasini o'rganib chiqib, yuqorida ko'rsatilgan formatga qat'iy rioya qilgan holda xulosa yozing:\n\n${extractedText}`;
 
-    const { text: analysisResult, modelUsed } = await generateWithFallback(
-      genAI,
-      systemInstruction,
-      prompt
-    );
+    let analysisResult: string;
+    let modelUsed: string;
+    try {
+      const result = await generateWithFallback(genAI, systemInstruction, prompt);
+      analysisResult = result.text;
+      modelUsed = result.modelUsed;
+    } catch (aiErr: any) {
+      // Ikkala model (asosiy va zaxira) ham javob berolmadi — server logida to'liq
+      // xatoni saqlaymiz, lekin laborantga tushunarli, qisqa xabar chiqaramiz.
+      console.error("[AI] Ikkala model ham ishlamadi:", aiErr?.message);
+      return NextResponse.json(
+        {
+          error:
+            "AI xizmati hozircha band yoki kunlik limit tugagan. Bir necha daqiqadan so'ng qayta urinib ko'ring.",
+        },
+        { status: 503 }
+      );
+    }
 
     const bodyParagraphs = textToWordParagraphs(analysisResult);
 
