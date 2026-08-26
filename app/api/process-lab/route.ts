@@ -65,6 +65,54 @@ function textToWordParagraphs(text: string): string {
     .join("");
 }
 
+// ---------- Asosiy model band bo'lsa, avtomatik zaxira modelga o'tish ----------
+
+const PRIMARY_MODEL = "gemini-3.6-flash";
+const FALLBACK_MODEL = "gemini-1.5-flash";
+
+function isOverloadError(err: any): boolean {
+  const status = err?.status ?? err?.response?.status;
+  const message = String(err?.message || "").toLowerCase();
+  return (
+    status === 429 || // Too Many Requests
+    status === 503 || // Service Unavailable / overloaded
+    message.includes("overloaded") ||
+    message.includes("resource_exhausted") ||
+    message.includes("unavailable") ||
+    message.includes("service is currently unavailable")
+  );
+}
+
+async function generateWithFallback(
+  genAI: GoogleGenerativeAI,
+  systemInstruction: string,
+  prompt: string
+): Promise<{ text: string; modelUsed: string }> {
+  try {
+    const primary = genAI.getGenerativeModel({
+      model: PRIMARY_MODEL,
+      systemInstruction,
+    });
+    const result = await primary.generateContent(prompt);
+    return { text: result.response.text().trim(), modelUsed: PRIMARY_MODEL };
+  } catch (err: any) {
+    if (!isOverloadError(err)) {
+      throw err; // boshqa turdagi xato — fallback yordam bermaydi, to'g'ridan-to'g'ri uloqtiramiz
+    }
+
+    console.warn(
+      `[AI] ${PRIMARY_MODEL} band/ishlamayapti (${err?.message}), ${FALLBACK_MODEL} ga o'tildi.`
+    );
+
+    const fallback = genAI.getGenerativeModel({
+      model: FALLBACK_MODEL,
+      systemInstruction,
+    });
+    const result = await fallback.generateContent(prompt);
+    return { text: result.response.text().trim(), modelUsed: FALLBACK_MODEL };
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -95,25 +143,25 @@ export async function POST(req: NextRequest) {
     const textMatches = docXml.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
     const extractedText = textMatches.map((t) => t.replace(/<[^>]+>/g, "")).join(" ");
 
-    const model = genAI.getGenerativeModel({
-      model: "gemini-3.6-flash",
-      systemInstruction:
-        "Siz tajribali laboratoriya shifokorisisiz. Berilgan laboratoriya tahlili natijalarini o'rganib, " +
-        "quyidagi QAT'IY formatda, faqat oddiy matn ko'rinishida (markdown, **, # belgilarisiz) javob bering:\n\n" +
-        "1-qator: Umumiy xulosa — 'Qon: ' bilan boshlanadigan bitta-ikkita gapli umumiy baho " +
-        "(masalan: 'Qon: Qonning biokimyoviy tahlili natijalariga ko'ra, asosiy ko'rsatkichlar me'yorda bo'lib, faqat X ko'rsatkichida chetlashish aniqlandi.').\n\n" +
-        "Keyingi qatorlar: me'yordan chetlashgan yoki alohida e'tibor talab qiladigan HAR BIR ko'rsatkich uchun " +
-        "ALOHIDA QATORDAN boshlab, '- Ko'rsatkich nomi: natija qiymati, me'yor bilan solishtirilgan holda, qisqa tibbiy izoh' " +
-        "formatida yozing. Nechta ko'rsatkich chetlashgan yoki muhim bo'lsa, shunchasini alohida qatorda bering — " +
-        "hech birini birlashtirmang.\n\n" +
-        "Oxirgi qator: 'Tavsiya: ' bilan boshlanadigan qisqa amaliy tavsiya (qaysi shifokorga murojaat qilish kerakligi).\n\n" +
-        "Har bir ko'rsatkich nomini aniq va tibbiy jihatdan to'g'ri yozing, taxmin qilmang — faqat berilgan ma'lumotlarga tayaning.",
-    });
+    const systemInstruction =
+      "Siz tajribali laboratoriya shifokorisisiz. Berilgan laboratoriya tahlili natijalarini o'rganib, " +
+      "quyidagi QAT'IY formatda, faqat oddiy matn ko'rinishida (markdown, **, # belgilarisiz) javob bering:\n\n" +
+      "1-qator: Umumiy xulosa — 'Qon: ' bilan boshlanadigan bitta-ikkita gapli umumiy baho " +
+      "(masalan: 'Qon: Qonning biokimyoviy tahlili natijalariga ko'ra, asosiy ko'rsatkichlar me'yorda bo'lib, faqat X ko'rsatkichida chetlashish aniqlandi.').\n\n" +
+      "Keyingi qatorlar: me'yordan chetlashgan yoki alohida e'tibor talab qiladigan HAR BIR ko'rsatkich uchun " +
+      "ALOHIDA QATORDAN boshlab, '- Ko'rsatkich nomi: natija qiymati, me'yor bilan solishtirilgan holda, qisqa tibbiy izoh' " +
+      "formatida yozing. Nechta ko'rsatkich chetlashgan yoki muhim bo'lsa, shunchasini alohida qatorda bering — " +
+      "hech birini birlashtirmang.\n\n" +
+      "Oxirgi qator: 'Tavsiya: ' bilan boshlanadigan qisqa amaliy tavsiya (qaysi shifokorga murojaat qilish kerakligi).\n\n" +
+      "Har bir ko'rsatkich nomini aniq va tibbiy jihatdan to'g'ri yozing, taxmin qilmang — faqat berilgan ma'lumotlarga tayaning.";
 
     const prompt = `Quyidagi laboratoriya tahlil natijasini o'rganib chiqib, yuqorida ko'rsatilgan formatga qat'iy rioya qilgan holda xulosa yozing:\n\n${extractedText}`;
 
-    const aiResult = await model.generateContent(prompt);
-    const analysisResult = aiResult.response.text().trim();
+    const { text: analysisResult, modelUsed } = await generateWithFallback(
+      genAI,
+      systemInstruction,
+      prompt
+    );
 
     const bodyParagraphs = textToWordParagraphs(analysisResult);
 
@@ -193,6 +241,7 @@ export async function POST(req: NextRequest) {
         "Content-Type":
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "Content-Disposition": `attachment; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
+        "X-AI-Model-Used": modelUsed,
       },
     });
   } catch (err: any) {
