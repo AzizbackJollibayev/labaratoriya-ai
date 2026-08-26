@@ -1,18 +1,14 @@
-@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=Inter:wght@400;500&family=IBM+Plex+Mono:wght@500&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&display=swap");
 
 :root {
-  --paper: #f5f6f1;
-  --card: #ffffff;
-  --ink: #16211d;
-  --ink-muted: #5c6a62;
-  --ink-faint: #8a968d;
-  --line: #d7ded7;
-  --teal: #0f6e56;
-  --teal-deep: #0b5041;
-  --teal-tint: rgba(15, 110, 86, 0.08);
-  --flag: #a6392b;
-  --flag-tint: rgba(166, 57, 43, 0.08);
-  --amber: #b98327;
+  --bg: #0a1526;
+  --panel: #101f36;
+  --line: #1e3a5c;
+  --blue: #2f8fe0;
+  --blue-soft: rgba(47, 143, 224, 0.12);
+  --text: #eaf2fb;
+  --text-muted: #6f8baa;
+  --flag: #e2665a;
 }
 
 * {
@@ -23,21 +19,10 @@ html,
 body {
   padding: 0;
   margin: 0;
-  background: var(--paper);
-  color: var(--ink);
-  font-family: "Inter", system-ui, sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
-
-h1,
-h2,
-h3 {
-  font-family: "Space Grotesk", "Inter", sans-serif;
-  margin: 0;
-}
-
-.mono {
+  background: var(--bg);
+  color: var(--text);
   font-family: "IBM Plex Mono", monospace;
+  -webkit-font-smoothing: antialiased;
 }
 
 a {
@@ -49,7 +34,7 @@ button {
 }
 
 :focus-visible {
-  outline: 2px solid var(--teal);
+  outline: 2px solid var(--blue);
   outline-offset: 2px;
 }
 
