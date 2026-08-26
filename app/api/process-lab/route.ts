@@ -68,22 +68,33 @@ function textToWordParagraphs(text: string): string {
 // ---------- Asosiy model band bo'lsa, avtomatik zaxira modelga o'tish ----------
 
 const PRIMARY_MODEL = "gemini-3.6-flash";
-const FALLBACK_MODEL = "gemini-1.5-flash";
+// TUZATILDI: eski "gemini-1.5-flash" allaqachon butunlay o'chirilgan (har doim 404 qaytaradi),
+// shuning uchun zaxira sifatida ishlamas edi. O'rniga hozirgi barqaror va BEPUL (free-tier)
+// "gemini-2.5-flash-lite" modeli qo'yildi.
+const FALLBACK_MODEL = "gemini-2.5-flash-lite";
 
+// TUZATILDI: avval faqat 429/503 (band bo'lish) holatlarini "overload" deb hisoblardi.
+// Agar asosiy model nomi noto'g'ri bo'lib qolsa yoki o'chirilgan bo'lsa, API odatda 404/
+// "not found" xatosi qaytaradi — bu ilgari umuman ushlanmas va fallback ishga tushmas edi.
+// Endi bunday holatlar ham fallbackni ishga tushiradi.
 function isOverloadError(err: any): boolean {
   const status = err?.status ?? err?.response?.status;
   const message = String(err?.message || "").toLowerCase();
   return (
     status === 429 ||
     status === 503 ||
+    status === 404 ||
     message.includes("overloaded") ||
     message.includes("resource_exhausted") ||
     message.includes("unavailable") ||
     message.includes("service is currently unavailable") ||
     message.includes("too many requests") ||
     message.includes("quota") ||
+    message.includes("not found") ||
+    message.includes("not_found") ||
     message.includes("429") ||
-    message.includes("503")
+    message.includes("503") ||
+    message.includes("404")
   );
 }
 
@@ -117,6 +128,19 @@ async function generateWithFallback(
   }
 }
 
+// TUZATILDI: DOCX dan matn ajratib olishda endi "o'chirilgan" (Track Changes -> w:del)
+// qatorlar hisobga olinmaydi. Avval oddiy regex <w:del> ichidagi matnni ham ushlab olar
+// va bemor tahliliga aloqasi bo'lmagan/o'chirilgan matn AI'ga yuborilar edi.
+function extractTextFromDocumentXml(docXml: string): string {
+  const withoutDeletedRuns = docXml.replace(/<w:del\b[^>]*>[\s\S]*?<\/w:del>/g, "");
+  const textMatches = withoutDeletedRuns.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
+  return textMatches.map((t) => t.replace(/<[^>]+>/g, "")).join(" ");
+}
+
+// Ruxsat etilgan maksimal fayl hajmi (MB). Serverga haddan tashqari katta yoki
+// soxta fayl yuklanishining oldini olish uchun.
+const MAX_FILE_SIZE_MB = 15;
+
 export async function POST(req: NextRequest) {
   try {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -130,22 +154,55 @@ export async function POST(req: NextRequest) {
     const genAI = new GoogleGenerativeAI(apiKey);
 
     const formData = await req.formData();
-    const file = formData.get("file") as File;
+    const file = formData.get("file");
 
-    if (!file) {
+    // TUZATILDI: avval "file" maydoni to'g'ridan-to'g'ri File deb hisoblanardi.
+    // Agar maydon umuman kelmasa yoki boshqa turda bo'lsa, keyinroq tushunarsiz
+    // xato chiqar edi. Endi aniq va tushunarli tekshiruv qo'yildi.
+    if (!file || !(file instanceof File)) {
       return NextResponse.json({ error: "Fayl tanlanmadi" }, { status: 400 });
     }
 
+    if (!file.name.toLowerCase().endsWith(".docx")) {
+      return NextResponse.json(
+        { error: "Faqat .docx formatidagi Word fayllarini yuklashingiz mumkin" },
+        { status: 400 }
+      );
+    }
+
+    if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+      return NextResponse.json(
+        { error: `Fayl hajmi ${MAX_FILE_SIZE_MB} MB dan oshmasligi kerak` },
+        { status: 400 }
+      );
+    }
+
     const arrayBuffer = await file.arrayBuffer();
-    const zip = await JSZip.loadAsync(arrayBuffer);
-    const docXml = await zip.file("word/document.xml")?.async("string");
+
+    let zip: JSZip;
+    let docXml: string | undefined;
+    try {
+      zip = await JSZip.loadAsync(arrayBuffer);
+      docXml = await zip.file("word/document.xml")?.async("string");
+    } catch {
+      return NextResponse.json(
+        { error: "Fayl buzilgan yoki noto'g'ri .docx formatda" },
+        { status: 400 }
+      );
+    }
 
     if (!docXml) {
       return NextResponse.json({ error: "DOCX faylni o'qishda xatolik yuz berdi" }, { status: 400 });
     }
 
-    const textMatches = docXml.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
-    const extractedText = textMatches.map((t) => t.replace(/<[^>]+>/g, "")).join(" ");
+    const extractedText = extractTextFromDocumentXml(docXml);
+
+    if (!extractedText.trim()) {
+      return NextResponse.json(
+        { error: "Fayl ichida tahlil qilinadigan matn topilmadi" },
+        { status: 400 }
+      );
+    }
 
     const systemInstruction =
       "Siz tajribali laboratoriya shifokorisisiz. Berilgan laboratoriya tahlili natijalarini o'rganib, " +
@@ -262,6 +319,13 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    // TUZATILDI: avval err.message to'g'ridan-to'g'ri klientga qaytarilardi — bu server
+    // ichki tuzilishi haqida keraksiz ma'lumot oshkor qilishi mumkin edi. Endi to'liq xato
+    // faqat serverda loglanadi, klientga esa umumiy va xavfsiz xabar boriladi.
+    console.error("[process-lab] Kutilmagan xato:", err);
+    return NextResponse.json(
+      { error: "Faylni qayta ishlashda kutilmagan xatolik yuz berdi" },
+      { status: 500 }
+    );
   }
 }
