@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 
 type Phase = "idle" | "dragging" | "processing" | "done" | "error";
 
@@ -10,19 +10,12 @@ export default function LaborantPage() {
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [downloadName, setDownloadName] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
-  const [today, setToday] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    setToday(
-      new Date().toLocaleDateString("uz-UZ", { day: "2-digit", month: "2-digit", year: "numeric" })
-    );
-  }, []);
 
   const processFile = useCallback(async (file: File) => {
     if (!file.name.toLowerCase().endsWith(".docx")) {
       setPhase("error");
-      setErrorMsg("Bu docx emas. Faqat .docx fayllar qabul qilinadi.");
+      setErrorMsg("faqat .docx");
       return;
     }
 
@@ -35,12 +28,10 @@ export default function LaborantPage() {
 
     try {
       const res = await fetch("/api/process-lab", { method: "POST", body: formData });
-
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Faylni qayta ishlashda xatolik yuz berdi.");
+        throw new Error(data.error || "xatolik");
       }
-
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       setDownloadUrl(url);
@@ -48,7 +39,7 @@ export default function LaborantPage() {
       setPhase("done");
     } catch (err: any) {
       setPhase("error");
-      setErrorMsg(err?.message || "Kutilmagan xatolik yuz berdi.");
+      setErrorMsg(err?.message || "xatolik");
     }
   }, []);
 
@@ -81,20 +72,23 @@ export default function LaborantPage() {
     if (phase !== "processing") inputRef.current?.click();
   };
 
+  const stateWord =
+    phase === "idle"
+      ? "tashlang"
+      : phase === "dragging"
+      ? "qo'ying"
+      : phase === "processing"
+      ? "skanerlanmoqda"
+      : phase === "done"
+      ? "tayyor"
+      : "xato";
+
   return (
     <main className="page">
-      <div className="tag-row mono">
-        <span className="tag-eyebrow">Laboratoriya · AI izoh</span>
-        <span className="tag-date">{today}</span>
-      </div>
-
-      <h1 className="headline">Tahlil faylini qo&apos;ying.</h1>
-      <p className="sub">
-        Natijalar normativ ko&apos;rsatkichlar bilan solishtiriladi, izoh biriktirilib qaytariladi.
-      </p>
+      <span className="tag">lab · ai</span>
 
       <section
-        className={`dropzone phase-${phase}`}
+        className={`frame phase-${phase}`}
         onDragOver={(e) => {
           e.preventDefault();
           if (phase === "idle") setPhase("dragging");
@@ -122,300 +116,211 @@ export default function LaborantPage() {
           style={{ display: "none" }}
         />
 
-        <div className="prompt">
-          {phase === "idle" && (
-            <>
-              <p className="prompt-main">Faylni shu yerga tashlang</p>
-              <p className="prompt-sub mono">yoki bosib tanlang · .docx</p>
-            </>
-          )}
-          {phase === "dragging" && <p className="prompt-main">Qo&apos;yib yuboring</p>}
-          {phase === "processing" && (
-            <>
-              <p className="prompt-main">Solishtirilmoqda</p>
-              <p className="prompt-sub mono">{fileName}</p>
-            </>
-          )}
-          {phase === "done" && <p className="prompt-main">Tayyor</p>}
-          {phase === "error" && <p className="prompt-main flag">{errorMsg}</p>}
-        </div>
+        <span className="corner tl" />
+        <span className="corner tr" />
+        <span className="corner bl" />
+        <span className="corner br" />
 
-        <div className="track">
-          <div className="zone" />
-          <div className={`marker marker-${phase}`} />
-        </div>
-        <div className="track-labels mono">
-          <span>past</span>
-          <span>me&apos;yor oralig&apos;i</span>
-          <span>yuqori</span>
+        {phase === "processing" && <span className="beam" />}
+
+        <div className="center">
+          <span className="word">{stateWord}</span>
+          {phase === "idle" && <span className="hint">.docx</span>}
+          {phase === "processing" && <span className="hint">{fileName}</span>}
+          {phase === "error" && <span className="hint flag">{errorMsg}</span>}
         </div>
       </section>
 
       {phase === "done" && downloadUrl && (
         <div className="stub">
-          <div className="stub-perf" aria-hidden="true" />
-          <div className="stub-row">
-            <div className="stub-info">
-              <span className="stub-file mono">{downloadName}</span>
-              <span className="stub-pill">tayyor</span>
-            </div>
-            <a className="stub-btn" href={downloadUrl} download={downloadName}>
-              Faylni yuklab olish
+          <span className="stub-name">{downloadName}</span>
+          <div className="stub-actions">
+            <a className="stub-dl" href={downloadUrl} download={downloadName}>
+              yuklab olish
             </a>
+            <button className="stub-reset" onClick={reset} aria-label="Yana bir fayl">
+              ↺
+            </button>
           </div>
-          <button className="stub-reset" onClick={reset}>
-            Yana bir fayl
-          </button>
         </div>
       )}
 
       {phase === "error" && (
         <button className="retry" onClick={reset}>
-          Qayta urinish
+          qayta
         </button>
       )}
 
       <style jsx>{`
         .page {
-          max-width: 640px;
+          max-width: 480px;
           margin: 0 auto;
-          padding: 72px 24px 56px;
-        }
-        .tag-row {
+          padding: 88px 24px 40px;
           display: flex;
-          justify-content: space-between;
-          align-items: baseline;
-          margin-bottom: 28px;
+          flex-direction: column;
+          align-items: center;
         }
-        .tag-eyebrow {
-          font-size: 12px;
-          letter-spacing: 0.06em;
-          text-transform: uppercase;
-          color: var(--teal);
+        .tag {
+          align-self: flex-start;
+          font-size: 11px;
+          letter-spacing: 0.08em;
+          color: var(--text-muted);
+          margin-bottom: 20px;
         }
-        .tag-date {
-          font-size: 12px;
-          color: var(--ink-faint);
-        }
-        .headline {
-          font-size: 32px;
-          font-weight: 600;
-          line-height: 1.2;
-          color: var(--ink);
-          margin-bottom: 10px;
-        }
-        .sub {
-          font-size: 15px;
-          color: var(--ink-muted);
-          line-height: 1.6;
-          margin: 0 0 36px;
-          max-width: 46ch;
-        }
-        .dropzone {
-          background: var(--card);
-          border: 1px dashed var(--line);
-          border-radius: 4px;
-          padding: 36px 28px 28px;
+        .frame {
+          position: relative;
+          width: 100%;
+          aspect-ratio: 1 / 0.82;
+          background: var(--panel);
+          border: 1px solid var(--line);
+          border-radius: 2px;
           cursor: pointer;
+          overflow: hidden;
           transition: border-color 0.15s ease, background 0.15s ease;
         }
-        .dropzone.phase-dragging {
-          border-color: var(--teal);
-          border-style: solid;
-          background: var(--teal-tint);
+        .frame.phase-dragging {
+          background: var(--blue-soft);
         }
-        .dropzone.phase-processing {
+        .frame.phase-processing {
           cursor: default;
-          border-style: solid;
-          border-color: var(--line);
         }
-        .dropzone.phase-done {
-          border-style: solid;
-          border-color: var(--teal);
-        }
-        .dropzone.phase-error {
-          border-style: solid;
+        .frame.phase-error {
           border-color: var(--flag);
         }
-        .prompt {
-          text-align: center;
-          margin-bottom: 24px;
-          min-height: 44px;
-        }
-        .prompt-main {
-          font-family: "Space Grotesk", sans-serif;
-          font-size: 17px;
-          font-weight: 500;
-          margin: 0 0 6px;
-          color: var(--ink);
-        }
-        .prompt-main.flag {
-          color: var(--flag);
-          font-size: 14px;
-          font-weight: 400;
-          font-family: "Inter", sans-serif;
-          max-width: 40ch;
-          margin: 0 auto;
-        }
-        .prompt-sub {
-          font-size: 12.5px;
-          color: var(--ink-faint);
-          margin: 0;
-        }
-        .track {
-          position: relative;
-          height: 34px;
-          margin: 0 6px;
-          background-image: repeating-linear-gradient(
-            to right,
-            var(--line) 0,
-            var(--line) 1px,
-            transparent 1px,
-            transparent 8.33%
-          );
-          background-position: center;
-          background-size: 100% 1px;
-          background-repeat: no-repeat;
-        }
-        .zone {
+        .corner {
           position: absolute;
-          left: 33%;
-          width: 34%;
-          top: 0;
-          bottom: 0;
-          background: var(--teal-tint);
+          width: 22px;
+          height: 22px;
+          border-color: var(--blue);
+          transition: border-color 0.15s ease;
         }
-        .marker {
-          position: absolute;
-          top: 50%;
-          width: 12px;
-          height: 12px;
-          border-radius: 50%;
-          background: var(--teal);
-          transform: translate(-50%, -50%);
-          opacity: 0;
-          left: 6%;
+        .phase-error .corner {
+          border-color: var(--flag);
         }
-        .marker-dragging {
-          opacity: 1;
-          animation: pulse 1s ease-in-out infinite;
+        .phase-dragging .corner,
+        .phase-processing .corner {
+          animation: glow 1.4s ease-in-out infinite;
         }
-        .marker-processing {
-          opacity: 1;
-          animation: sweep 1.3s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+        .tl {
+          top: 14px;
+          left: 14px;
+          border-top: 2px solid;
+          border-left: 2px solid;
         }
-        .marker-done {
-          opacity: 1;
-          left: 78%;
-          transition: left 0.6s ease;
+        .tr {
+          top: 14px;
+          right: 14px;
+          border-top: 2px solid;
+          border-right: 2px solid;
         }
-        .marker-error {
-          opacity: 1;
-          left: 6%;
-          background: var(--flag);
+        .bl {
+          bottom: 14px;
+          left: 14px;
+          border-bottom: 2px solid;
+          border-left: 2px solid;
         }
-        @keyframes pulse {
+        .br {
+          bottom: 14px;
+          right: 14px;
+          border-bottom: 2px solid;
+          border-right: 2px solid;
+        }
+        @keyframes glow {
           0%,
           100% {
-            transform: translate(-50%, -50%) scale(1);
+            opacity: 0.55;
           }
           50% {
-            transform: translate(-50%, -50%) scale(1.4);
+            opacity: 1;
           }
+        }
+        .beam {
+          position: absolute;
+          left: 14px;
+          right: 14px;
+          height: 2px;
+          background: var(--blue);
+          box-shadow: 0 0 12px 2px var(--blue);
+          animation: sweep 1.6s ease-in-out infinite;
         }
         @keyframes sweep {
           0% {
-            left: 6%;
+            top: 14px;
           }
           50% {
-            left: 82%;
+            top: calc(100% - 16px);
           }
           100% {
-            left: 6%;
+            top: 14px;
           }
         }
-        .track-labels {
+        .center {
+          position: absolute;
+          inset: 0;
           display: flex;
-          justify-content: space-between;
-          margin: 8px 6px 0;
-          font-size: 11px;
-          color: var(--ink-faint);
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+        }
+        .word {
+          font-size: 19px;
+          font-weight: 600;
+          color: var(--text);
+        }
+        .hint {
+          font-size: 12px;
+          color: var(--text-muted);
+        }
+        .hint.flag {
+          color: var(--flag);
         }
         .stub {
-          margin-top: 20px;
-          background: var(--card);
-          border: 1px solid var(--line);
-          border-radius: 4px;
-          padding: 4px 20px 18px;
-        }
-        .stub-perf {
-          height: 1px;
-          margin: 0 -20px 16px;
-          background-image: repeating-linear-gradient(
-            to right,
-            var(--line) 0,
-            var(--line) 4px,
-            transparent 4px,
-            transparent 9px
-          );
-        }
-        .stub-row {
+          width: 100%;
+          margin-top: 16px;
           display: flex;
           align-items: center;
           justify-content: space-between;
-          gap: 16px;
-          flex-wrap: wrap;
+          gap: 12px;
+          padding: 12px 4px;
+          border-top: 1px solid var(--line);
         }
-        .stub-info {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          min-width: 0;
-        }
-        .stub-file {
-          font-size: 13px;
-          color: var(--ink);
+        .stub-name {
+          font-size: 12px;
+          color: var(--text-muted);
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
         }
-        .stub-pill {
+        .stub-actions {
+          display: flex;
+          align-items: center;
+          gap: 14px;
           flex-shrink: 0;
-          font-size: 11px;
-          color: var(--teal-deep);
-          background: var(--teal-tint);
-          padding: 3px 9px;
-          border-radius: 3px;
         }
-        .stub-btn {
-          flex-shrink: 0;
-          background: var(--ink);
-          color: var(--paper);
+        .stub-dl {
+          color: var(--blue);
           text-decoration: none;
-          font-size: 13.5px;
-          font-weight: 500;
-          padding: 10px 18px;
-          border-radius: 4px;
+          font-size: 13px;
+          font-weight: 600;
         }
         .stub-reset {
-          display: block;
-          margin: 14px 0 0;
           background: none;
           border: none;
-          color: var(--ink-faint);
-          font-size: 12.5px;
-          text-decoration: underline;
+          color: var(--text-muted);
+          font-size: 15px;
           cursor: pointer;
-          padding: 0;
+          line-height: 1;
+          padding: 2px;
         }
         .retry {
-          margin-top: 16px;
+          margin-top: 14px;
           background: none;
           border: 1px solid var(--flag);
           color: var(--flag);
-          font-size: 13px;
-          padding: 8px 16px;
-          border-radius: 4px;
+          font-size: 12px;
+          padding: 7px 14px;
+          border-radius: 2px;
           cursor: pointer;
         }
       `}</style>
