@@ -1,329 +1,182 @@
-"use client";
+  "use client";
 
-import React, { useCallback, useRef, useState } from "react";
+  import React, { useState } from "react";
 
-type Phase = "idle" | "dragging" | "processing" | "done" | "error";
+  export default function LaborantPage() {
+    const [file, setFile] = useState<File | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+    const [downloadName, setDownloadName] = useState("");
+    const [error, setError] = useState("");
+    const [isDragging, setIsDragging] = useState(false);
 
-export default function LaborantPage() {
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [fileName, setFileName] = useState("");
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
-  const [downloadName, setDownloadName] = useState("");
-  const [errorMsg, setErrorMsg] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const processFile = useCallback(async (file: File) => {
-    if (!file.name.toLowerCase().endsWith(".docx")) {
-      setPhase("error");
-      setErrorMsg("faqat .docx");
-      return;
-    }
-
-    setFileName(file.name);
-    setPhase("processing");
-    setErrorMsg("");
-
-    const formData = new FormData();
-    formData.append("file", file);
-
-    try {
-      const res = await fetch("/api/process-lab", { method: "POST", body: formData });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "xatolik");
+    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.files && e.target.files[0]) {
+        setFile(e.target.files[0]);
+        setError("");
+        setDownloadUrl(null);
       }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      setDownloadUrl(url);
-      setDownloadName(`TAHLIL_${file.name}`);
-      setPhase("done");
-    } catch (err: any) {
-      setPhase("error");
-      setErrorMsg(err?.message || "xatolik");
-    }
-  }, []);
+    };
 
-  const onDrop = useCallback(
-    (e: React.DragEvent) => {
+    // Drag & Drop (Faylni sudrab kelib tashlash) hodisalari
+    const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
-      const file = e.dataTransfer.files?.[0];
-      if (file) processFile(file);
-    },
-    [processFile]
-  );
+      setIsDragging(true);
+    };
 
-  const onSelect = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (file) processFile(file);
-    },
-    [processFile]
-  );
+    const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      setIsDragging(false);
+    };
 
-  const reset = () => {
-    setPhase("idle");
-    setFileName("");
-    setDownloadUrl(null);
-    setErrorMsg("");
-    if (inputRef.current) inputRef.current.value = "";
-  };
+    const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      setIsDragging(false);
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+        const droppedFile = e.dataTransfer.files[0];
+        if (droppedFile.name.endsWith(".docx")) {
+          setFile(droppedFile);
+          setError("");
+          setDownloadUrl(null);
+        } else {
+          setError("Faqat .docx formatidagi Word fayllarini yuklashingiz mumkin!");
+        }
+      }
+    };
 
-  const openPicker = () => {
-    if (phase !== "processing") inputRef.current?.click();
-  };
+    const handleProcess = async () => {
+      if (!file) {
+        setError("Iltimos, avval laboratoriya faylini yuklang!");
+        return;
+      }
 
-  const stateWord =
-    phase === "idle"
-      ? "tashlang"
-      : phase === "dragging"
-      ? "qo'ying"
-      : phase === "processing"
-      ? "skanerlanmoqda"
-      : phase === "done"
-      ? "tayyor"
-      : "xato";
+      setLoading(true);
+      setError("");
+      setDownloadUrl(null);
 
-  return (
-    <main className="page">
-      <span className="tag">lab · ai</span>
+      const formData = new FormData();
+      formData.append("file", file);
 
-      <section
-        className={`frame phase-${phase}`}
-        onDragOver={(e) => {
-          e.preventDefault();
-          if (phase === "idle") setPhase("dragging");
-        }}
-        onDragLeave={() => {
-          if (phase === "dragging") setPhase("idle");
-        }}
-        onDrop={onDrop}
-        onClick={openPicker}
-        role="button"
-        tabIndex={0}
-        aria-label="Tahlil faylini tashlang yoki tanlang"
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            openPicker();
-          }
-        }}
-      >
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".docx"
-          onChange={onSelect}
-          style={{ display: "none" }}
-        />
+      try {
+        const response = await fetch("/api/process-lab", {
+          method: "POST",
+          body: formData,
+        });
 
-        <span className="corner tl" />
-        <span className="corner tr" />
-        <span className="corner bl" />
-        <span className="corner br" />
+        if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(errData.error || "Tahlil qilishda xatolik yuz berdi");
+        }
 
-        {phase === "processing" && <span className="beam" />}
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        setDownloadUrl(url);
+        setDownloadName(`TAHLIL_${file.name}`);
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
 
-        <div className="center">
-          <span className="word">{stateWord}</span>
-          {phase === "idle" && <span className="hint">.docx</span>}
-          {phase === "processing" && <span className="hint">{fileName}</span>}
-          {phase === "error" && <span className="hint flag">{errorMsg}</span>}
+    return (
+      <div style={{ maxWidth: "650px", margin: "60px auto", fontFamily: "sans-serif", padding: "0 20px" }}>
+        <div style={{ textAlign: "center", marginBottom: "30px" }}>
+          <h1 style={{ color: "#0f172a", marginBottom: "8px" }}>🩺 Laboratoriya AI Tahlil Tizimi</h1>
+          <p style={{ color: "#64748b", margin: 0 }}>Faylni yuklang, AI tahlil qo'shilgan tayyor hujjatni bemorga yuboring</p>
         </div>
-      </section>
 
-      {phase === "done" && downloadUrl && (
-        <div className="stub">
-          <span className="stub-name">{downloadName}</span>
-          <div className="stub-actions">
-            <a className="stub-dl" href={downloadUrl} download={downloadName}>
-              yuklab olish
-            </a>
-            <button className="stub-reset" onClick={reset} aria-label="Yana bir fayl">
-              ↺
+        <div
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          style={{
+            background: isDragging ? "#eff6ff" : "#ffffff",
+            border: isDragging ? "2px dashed #2563eb" : "2px dashed #cbd5e1",
+            borderRadius: "16px",
+            padding: "40px 20px",
+            textAlign: "center",
+            transition: "all 0.2s ease",
+          }}
+        >
+          <input
+            type="file"
+            accept=".docx"
+            id="fileInput"
+            onChange={handleFileChange}
+            style={{ display: "none" }}
+          />
+          <label
+            htmlFor="fileInput"
+            style={{
+              display: "inline-block",
+              padding: "12px 24px",
+              background: "#f1f5f9",
+              borderRadius: "8px",
+              cursor: "pointer",
+              fontWeight: "600",
+              color: "#334155",
+              marginBottom: "8px",
+            }}
+          >
+            📁 Faylni tanlash (.docx)
+          </label>
+          
+          <p style={{ color: "#94a3b8", fontSize: "14px", margin: "8px 0" }}>
+            yoki faylni shu yerga sudrab kelib tashlang
+          </p>
+
+          {file && <p style={{ color: "#2563eb", fontWeight: "600", marginTop: "12px" }}>Tanlandi: {file.name}</p>}
+
+          <div style={{ marginTop: "20px" }}>
+            <button
+              onClick={handleProcess}
+              disabled={loading || !file}
+              style={{
+                width: "100%",
+                padding: "14px",
+                background: loading ? "#94a3b8" : "#2563eb",
+                color: "#fff",
+                border: "none",
+                borderRadius: "10px",
+                fontSize: "16px",
+                fontWeight: "bold",
+                cursor: loading || !file ? "not-allowed" : "pointer",
+              }}
+            >
+              {loading ? "Gemini AI tahlil qilmoqda..." : "🚀 Tahlil qilish va Faylni Tayyorlash"}
             </button>
           </div>
         </div>
-      )}
 
-      {phase === "error" && (
-        <button className="retry" onClick={reset}>
-          qayta
-        </button>
-      )}
+        {error && (
+          <div style={{ background: "#fef2f2", color: "#dc2626", padding: "14px", borderRadius: "10px", marginTop: "20px" }}>
+            ⚠️ {error}
+          </div>
+        )}
 
-      <style jsx>{`
-        .page {
-          max-width: 480px;
-          margin: 0 auto;
-          padding: 88px 24px 40px;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-        }
-        .tag {
-          align-self: flex-start;
-          font-size: 11px;
-          letter-spacing: 0.08em;
-          color: var(--text-muted);
-          margin-bottom: 20px;
-        }
-        .frame {
-          position: relative;
-          width: 100%;
-          aspect-ratio: 1 / 0.82;
-          background: var(--panel);
-          border: 1px solid var(--line);
-          border-radius: 2px;
-          cursor: pointer;
-          overflow: hidden;
-          transition: border-color 0.15s ease, background 0.15s ease;
-        }
-        .frame.phase-dragging {
-          background: var(--blue-soft);
-        }
-        .frame.phase-processing {
-          cursor: default;
-        }
-        .frame.phase-error {
-          border-color: var(--flag);
-        }
-        .corner {
-          position: absolute;
-          width: 22px;
-          height: 22px;
-          border-color: var(--blue);
-          transition: border-color 0.15s ease;
-        }
-        .phase-error .corner {
-          border-color: var(--flag);
-        }
-        .phase-dragging .corner,
-        .phase-processing .corner {
-          animation: glow 1.4s ease-in-out infinite;
-        }
-        .tl {
-          top: 14px;
-          left: 14px;
-          border-top: 2px solid;
-          border-left: 2px solid;
-        }
-        .tr {
-          top: 14px;
-          right: 14px;
-          border-top: 2px solid;
-          border-right: 2px solid;
-        }
-        .bl {
-          bottom: 14px;
-          left: 14px;
-          border-bottom: 2px solid;
-          border-left: 2px solid;
-        }
-        .br {
-          bottom: 14px;
-          right: 14px;
-          border-bottom: 2px solid;
-          border-right: 2px solid;
-        }
-        @keyframes glow {
-          0%,
-          100% {
-            opacity: 0.55;
-          }
-          50% {
-            opacity: 1;
-          }
-        }
-        .beam {
-          position: absolute;
-          left: 14px;
-          right: 14px;
-          height: 2px;
-          background: var(--blue);
-          box-shadow: 0 0 12px 2px var(--blue);
-          animation: sweep 1.6s ease-in-out infinite;
-        }
-        @keyframes sweep {
-          0% {
-            top: 14px;
-          }
-          50% {
-            top: calc(100% - 16px);
-          }
-          100% {
-            top: 14px;
-          }
-        }
-        .center {
-          position: absolute;
-          inset: 0;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          gap: 8px;
-        }
-        .word {
-          font-size: 19px;
-          font-weight: 600;
-          color: var(--text);
-        }
-        .hint {
-          font-size: 12px;
-          color: var(--text-muted);
-        }
-        .hint.flag {
-          color: var(--flag);
-        }
-        .stub {
-          width: 100%;
-          margin-top: 16px;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 12px;
-          padding: 12px 4px;
-          border-top: 1px solid var(--line);
-        }
-        .stub-name {
-          font-size: 12px;
-          color: var(--text-muted);
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-        .stub-actions {
-          display: flex;
-          align-items: center;
-          gap: 14px;
-          flex-shrink: 0;
-        }
-        .stub-dl {
-          color: var(--blue);
-          text-decoration: none;
-          font-size: 13px;
-          font-weight: 600;
-        }
-        .stub-reset {
-          background: none;
-          border: none;
-          color: var(--text-muted);
-          font-size: 15px;
-          cursor: pointer;
-          line-height: 1;
-          padding: 2px;
-        }
-        .retry {
-          margin-top: 14px;
-          background: none;
-          border: 1px solid var(--flag);
-          color: var(--flag);
-          font-size: 12px;
-          padding: 7px 14px;
-          border-radius: 2px;
-          cursor: pointer;
-        }
-      `}</style>
-    </main>
-  );
-}
+        {downloadUrl && (
+          <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", padding: "20px", borderRadius: "12px", marginTop: "24px", textAlign: "center" }}>
+            <p style={{ color: "#166534", fontWeight: "bold", marginBottom: "12px" }}>
+              ✅ Fayl tayyorlandi! Gemini AI xulosasi fayl oxiriga biriktirildi.
+            </p>
+            <a
+              href={downloadUrl}
+              download={downloadName}
+              style={{
+                display: "inline-block",
+                padding: "12px 28px",
+                background: "#16a34a",
+                color: "#fff",
+                textDecoration: "none",
+                borderRadius: "8px",
+                fontWeight: "bold",
+              }}
+            >
+              📥 Tayyor Faylni Yuklab Olish (Bemor uchun)
+            </a>
+          </div>
+        )}
+      </div>
+    );
+  }
