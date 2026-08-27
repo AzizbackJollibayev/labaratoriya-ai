@@ -207,16 +207,22 @@ export async function POST(req: NextRequest) {
     const systemInstruction =
       "Siz tajribali laboratoriya shifokorisisiz. Berilgan laboratoriya tahlili natijalarini o'rganib, " +
       "quyidagi QAT'IY formatda, faqat oddiy matn ko'rinishida (markdown, **, # belgilarisiz) javob bering:\n\n" +
-      "1-qator: Umumiy xulosa — 'Qon: ' bilan boshlanadigan bitta-ikkita gapli umumiy baho " +
-      "(masalan: 'Qon: Qonning biokimyoviy tahlili natijalariga ko'ra, asosiy ko'rsatkichlar me'yorda bo'lib, faqat X ko'rsatkichida chetlashish aniqlandi.').\n\n" +
+      "1-qator: Umumiy xulosa — 'Qon: ' bilan boshlanadigan bitta gapli QISQA umumiy baho " +
+      "(masalan: 'Qon: Asosiy ko'rsatkichlar me'yorda, faqat X ko'rsatkichida chetlashish bor.'). " +
+      "10-15 so'zdan oshmasin.\n\n" +
       "Keyingi qatorlar: me'yordan chetlashgan yoki alohida e'tibor talab qiladigan HAR BIR ko'rsatkich uchun " +
-      "ALOHIDA QATORDAN boshlab, '- Ko'rsatkich nomi: natija qiymati, me'yor bilan solishtirilgan holda, qisqa tibbiy izoh' " +
-      "formatida yozing. Nechta ko'rsatkich chetlashgan yoki muhim bo'lsa, shunchasini alohida qatorda bering — " +
-      "hech birini birlashtirmang.\n\n" +
-      "Oxirgi qator: 'Tavsiya: ' bilan boshlanadigan qisqa amaliy tavsiya (qaysi shifokorga murojaat qilish kerakligi).\n\n" +
-      "Har bir ko'rsatkich nomini aniq va tibbiy jihatdan to'g'ri yozing, taxmin qilmang — faqat berilgan ma'lumotlarga tayaning.";
+      "ALOHIDA QATORDAN boshlab, QAT'IY QISQA formatda yozing:\n" +
+      "'- Ko'rsatkich nomi: natija qiymati (me'yor: X-Y), izoh 3-6 so'z bilan.'\n" +
+      "Izoh faqat eng muhim tibbiy ma'noni bering (masalan: 'yuqori — yallig'lanish belgisi', " +
+      "'past — kamqonlikka xos', 'me'yordan yuqori — jigar funksiyasini tekshirtiring'). " +
+      "Uzun tushuntirish, sabab-oqibat tahlili yoki umumiy gaplar YOZMANG — faqat qiymat, me'yor va bir " +
+      "qisqa tibbiy izoh. Har bir qator 1 qatorga sig'ishi kerak, ortiqcha so'z ishlatmang.\n\n" +
+      "Oxirgi qator: 'Tavsiya: ' bilan boshlanadigan bitta qisqa amaliy tavsiya (qaysi shifokorga murojaat " +
+      "qilish kerakligi, 10 so'zdan oshmasin).\n\n" +
+      "Har bir ko'rsatkich nomini aniq va tibbiy jihatdan to'g'ri yozing, taxmin qilmang — faqat berilgan " +
+      "ma'lumotlarga tayaning. Faqat me'yordan chetlashgan yoki muhim ko'rsatkichlarni yozing, hammasini emas.";
 
-    const prompt = `Quyidagi laboratoriya tahlil natijasini o'rganib chiqib, yuqorida ko'rsatilgan formatga qat'iy rioya qilgan holda xulosa yozing:\n\n${extractedText}`;
+    const prompt = `Quyidagi laboratoriya tahlil natijasini o'rganib chiqib, yuqorida ko'rsatilgan formatga qat'iy rioya qilgan holda, IMKON QADAR QISQA va aniq xulosa yozing:\n\n${extractedText}`;
 
     let analysisResult: string;
     let modelUsed: string;
