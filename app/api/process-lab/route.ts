@@ -42,11 +42,10 @@ function textToWordParagraphs(text: string): string {
       const indent = isBullet ? `<w:ind w:left="360"/>` : "";
       const bulletPrefix = isBullet ? "•  " : "";
 
-      // ":" bo'yicha bold label / oddiy matn qismlarga ajratish
       const colonIdx = cleanLine.indexOf(":");
       let runs: string;
       if (colonIdx > -1 && colonIdx < 60) {
-        const label = cleanLine.slice(0, colonIdx + 1); // ":" bilan birga
+        const label = cleanLine.slice(0, colonIdx + 1);
         const rest = cleanLine.slice(colonIdx + 1);
         runs = makeRun(bulletPrefix + label, true) + makeRun(rest, false);
       } else {
@@ -68,15 +67,8 @@ function textToWordParagraphs(text: string): string {
 // ---------- Asosiy model band bo'lsa, avtomatik zaxira modelga o'tish ----------
 
 const PRIMARY_MODEL = "gemini-3.6-flash";
-// TUZATILDI: eski "gemini-1.5-flash" allaqachon butunlay o'chirilgan (har doim 404 qaytaradi),
-// shuning uchun zaxira sifatida ishlamas edi. O'rniga hozirgi barqaror va BEPUL (free-tier)
-// "gemini-2.5-flash-lite" modeli qo'yildi.
 const FALLBACK_MODEL = "gemini-2.5-flash-lite";
 
-// TUZATILDI: avval faqat 429/503 (band bo'lish) holatlarini "overload" deb hisoblardi.
-// Agar asosiy model nomi noto'g'ri bo'lib qolsa yoki o'chirilgan bo'lsa, API odatda 404/
-// "not found" xatosi qaytaradi — bu ilgari umuman ushlanmas va fallback ishga tushmas edi.
-// Endi bunday holatlar ham fallbackni ishga tushiradi.
 function isOverloadError(err: any): boolean {
   const status = err?.status ?? err?.response?.status;
   const message = String(err?.message || "").toLowerCase();
@@ -98,6 +90,25 @@ function isOverloadError(err: any): boolean {
   );
 }
 
+// Gemini chaqiruvini timeout bilan o'raymiz — server abadiy "osilib qolmasligi" uchun
+const AI_TIMEOUT_MS = 30000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} vaqt limiti tugadi (${ms}ms)`)), ms);
+    promise.then(
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
+
 async function generateWithFallback(
   genAI: GoogleGenerativeAI,
   systemInstruction: string,
@@ -108,37 +119,86 @@ async function generateWithFallback(
       model: PRIMARY_MODEL,
       systemInstruction,
     });
-    const result = await primary.generateContent(prompt);
+    const result = await withTimeout(
+      primary.generateContent(prompt),
+      AI_TIMEOUT_MS,
+      PRIMARY_MODEL
+    );
     return { text: result.response.text().trim(), modelUsed: PRIMARY_MODEL };
   } catch (err: any) {
-    if (!isOverloadError(err)) {
-      throw err; // boshqa turdagi xato — fallback yordam bermaydi, to'g'ridan-to'g'ri uloqtiramiz
+    if (!isOverloadError(err) && !String(err?.message).includes("vaqt limiti")) {
+      throw err;
     }
 
     console.warn(
-      `[AI] ${PRIMARY_MODEL} band/ishlamayapti (${err?.message}), ${FALLBACK_MODEL} ga o'tildi.`
+      `[AI] ${PRIMARY_MODEL} band/ishlamayapti yoki vaqt tugadi (${err?.message}), ${FALLBACK_MODEL} ga o'tildi.`
     );
 
     const fallback = genAI.getGenerativeModel({
       model: FALLBACK_MODEL,
       systemInstruction,
     });
-    const result = await fallback.generateContent(prompt);
+    const result = await withTimeout(
+      fallback.generateContent(prompt),
+      AI_TIMEOUT_MS,
+      FALLBACK_MODEL
+    );
     return { text: result.response.text().trim(), modelUsed: FALLBACK_MODEL };
   }
 }
 
-// TUZATILDI: DOCX dan matn ajratib olishda endi "o'chirilgan" (Track Changes -> w:del)
-// qatorlar hisobga olinmaydi. Avval oddiy regex <w:del> ichidagi matnni ham ushlab olar
-// va bemor tahliliga aloqasi bo'lmagan/o'chirilgan matn AI'ga yuborilar edi.
+// Jadval qatorlarini alohida saqlab qoladigan matn ajratish — "Ko'rsatkich | Natija |
+// Norma | birlik" tuzilishi yo'qolmasin deb, AI natija va normani noto'g'ri bog'lamasin.
 function extractTextFromDocumentXml(docXml: string): string {
   const withoutDeletedRuns = docXml.replace(/<w:del\b[^>]*>[\s\S]*?<\/w:del>/g, "");
+
+  const rows = withoutDeletedRuns.match(/<w:tr\b[\s\S]*?<\/w:tr>/g);
+  if (rows && rows.length > 0) {
+    const lines = rows.map((row) => {
+      const cells = row.match(/<w:tc\b[\s\S]*?<\/w:tc>/g) || [];
+      const cellTexts = cells.map((cell) => {
+        const tMatches = cell.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
+        return tMatches
+          .map((t) => t.replace(/<[^>]+>/g, ""))
+          .join("")
+          .trim();
+      });
+      return cellTexts.filter((c) => c.length > 0).join(" | ");
+    });
+    const tableText = lines.filter((l) => l.length > 0).join("\n");
+
+    const withoutTables = withoutDeletedRuns.replace(/<w:tbl\b[\s\S]*?<\/w:tbl>/g, "\n");
+    const outsideMatches = withoutTables.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
+    const outsideText = outsideMatches.map((t) => t.replace(/<[^>]+>/g, "")).join(" ").trim();
+
+    return `${outsideText}\n\n${tableText}`.trim();
+  }
+
   const textMatches = withoutDeletedRuns.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
   return textMatches.map((t) => t.replace(/<[^>]+>/g, "")).join(" ");
 }
 
-// Ruxsat etilgan maksimal fayl hajmi (MB). Serverga haddan tashqari katta yoki
-// soxta fayl yuklanishining oldini olish uchun.
+// Fayl haqiqatan laboratoriya tahlili ekanligini tekshiruvchi oddiy filtr —
+// tasodifiy/mos kelmaydigan hujjat AI'ga yuborilib, noto'g'ri "tahlil" chiqmasligi uchun
+const LAB_KEYWORDS = [
+  "натижа",
+  "natija",
+  "норма",
+  "norma",
+  "текширилувчи",
+  "tekshiriluvchi",
+  "курсаткич",
+  "ko'rsatkich",
+  "ммоль",
+  "mmol",
+  "мкмоль",
+];
+
+function looksLikeLabReport(text: string): boolean {
+  const lower = text.toLowerCase();
+  return LAB_KEYWORDS.some((kw) => lower.includes(kw.toLowerCase()));
+}
+
 const MAX_FILE_SIZE_MB = 15;
 
 export async function POST(req: NextRequest) {
@@ -156,9 +216,6 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const file = formData.get("file");
 
-    // TUZATILDI: avval "file" maydoni to'g'ridan-to'g'ri File deb hisoblanardi.
-    // Agar maydon umuman kelmasa yoki boshqa turda bo'lsa, keyinroq tushunarsiz
-    // xato chiqar edi. Endi aniq va tushunarli tekshiruv qo'yildi.
     if (!file || !(file instanceof File)) {
       return NextResponse.json({ error: "Fayl tanlanmadi" }, { status: 400 });
     }
@@ -204,19 +261,61 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const systemInstruction =
-      "Siz tajribali laboratoriya shifokorisisiz. Berilgan laboratoriya tahlili natijalarini o'rganib, " +
-      "quyidagi QAT'IY formatda, faqat oddiy matn ko'rinishida (markdown, **, # belgilarisiz) javob bering:\n\n" +
-      "1-qator: Umumiy xulosa — 'Qon: ' bilan boshlanadigan bitta-ikkita gapli umumiy baho " +
-      "(masalan: 'Qon: Qonning biokimyoviy tahlili natijalariga ko'ra, asosiy ko'rsatkichlar me'yorda bo'lib, faqat X ko'rsatkichida chetlashish aniqlandi.').\n\n" +
-      "Keyingi qatorlar: me'yordan chetlashgan yoki alohida e'tibor talab qiladigan HAR BIR ko'rsatkich uchun " +
-      "ALOHIDA QATORDAN boshlab, '- Ko'rsatkich nomi: natija qiymati, me'yor bilan solishtirilgan holda, qisqa tibbiy izoh' " +
-      "formatida yozing. Nechta ko'rsatkich chetlashgan yoki muhim bo'lsa, shunchasini alohida qatorda bering — " +
-      "hech birini birlashtirmang.\n\n" +
-      "Oxirgi qator: 'Tavsiya: ' bilan boshlanadigan qisqa amaliy tavsiya (qaysi shifokorga murojaat qilish kerakligi).\n\n" +
-      "Har bir ko'rsatkich nomini aniq va tibbiy jihatdan to'g'ri yozing, taxmin qilmang — faqat berilgan ma'lumotlarga tayaning.";
+    if (!looksLikeLabReport(extractedText)) {
+      return NextResponse.json(
+        {
+          error:
+            "Fayl laboratoriya tahlil natijasiga o'xshamayapti. Iltimos, to'g'ri hujjatni yuklaganingizni tekshiring.",
+        },
+        { status: 400 }
+      );
+    }
 
-    const prompt = `Quyidagi laboratoriya tahlil natijasini o'rganib chiqib, yuqorida ko'rsatilgan formatga qat'iy rioya qilgan holda xulosa yozing:\n\n${extractedText}`;
+    // AI'dan: (1) faqat aniq/berilgan ma'lumotga tayangan, (2) natijasi mavjud
+    // HAR BIR ko'rsatkichni to'liq, (3) oddiy odam tushunadigan sodda tilda,
+    // (4) tashxis emasligini ochiq aytadigan tahlil so'raladi.
+    const systemInstruction =
+      "Siz tajribali laboratoriya shifokorisiz. Sizga jadval ko'rinishidagi laboratoriya tahlili " +
+      "berilgan; har bir qator 'katakcha1 | katakcha2 | ...' formatida, odatda " +
+      "'Ko'rsatkich nomi | Natija | Norma | O'lchov birligi' tartibida keladi.\n\n" +
+      "ANIQLIK BO'YICHA QAT'IY QOIDALAR:\n" +
+      "- Faqat berilgan matnda aniq ko'rsatilgan sonlar va nomlarga tayaning. Hech narsani " +
+      "taxmin qilmang, o'ylab topmang yoki umumlashtirmang.\n" +
+      "- Natija qiymatini tegishli norma oralig'i bilan diqqat bilan solishtiring — qaysi qatorga " +
+      "tegishli ekanini chalkashtirmang (masalan 'Umumiy', 'Bog'langan', 'Erkin' bilirubin — bularning " +
+      "har biri alohida natija va alohida norma oralig'iga ega, ularni aralashtirmang).\n" +
+      "- Erkak (Э/А, эркак/аёл) uchun norma alohida ko'rsatilgan bo'lsa va bemor jinsi hujjatda aniq " +
+      "bo'lmasa, ikkala normani ham eslatib o'ting, aniq bittasini tanlab olmang.\n\n" +
+      "TARKIB BO'YICHA QOIDALAR:\n" +
+      "1. Faqat NATIJA QIYMATI ko'rsatilgan (bo'sh bo'lmagan) ko'rsatkichlarni tahlil qiling. Natija " +
+      "bo'sh bo'lsa (o'lchov o'tkazilmagan), o'sha ko'rsatkichni butunlay o'tkazib yuboring.\n" +
+      "2. Bemor topshirgan HAR BIR natijasi mavjud ko'rsatkich uchun ALOHIDA qator yozing — " +
+      "birortasini ham tashlab ketmang, birortasini ham birlashtirmang.\n" +
+      "3. Har bir qatorda: ko'rsatkich nomi, natija qiymati (birligi bilan), me'yor bilan solishtirilgan " +
+      "holati (me'yorda / me'yordan yuqori / me'yordan past). Me'yorda bo'lsa — shunchaki 'me'yorda' " +
+      "deb yozing. Chetlashgan bo'lsa — bu ko'rsatkich odatda nimani anglatishi haqida oddiy, sodda " +
+      "tilda 1 qisqa jumla qo'shing (tashxis qo'ymasdan, faqat umumiy tushuntirish sifatida).\n" +
+      "4. Tilni ODDIY ODAM tushunadigan darajada sodda tuting — tibbiy atamalarni ishlatgan bo'lsangiz, " +
+      "qavs ichida bir og'iz so'z bilan izohlang (masalan 'kreatinin (buyrak faoliyati ko'rsatkichi)'). " +
+      "Gaplarni cho'zmang, har bir qator bitta qisqa qatordan oshmasin.\n" +
+      "5. Bu XULOSA TASHXIS EMASLIGINI hech qachon unutmang — faqat natijalarni tushuntirasiz, " +
+      "kasallik nomini aytmaysiz yoki davolash tayinlamaysiz.\n" +
+      "6. Faqat oddiy matn (markdown, **, # belgilarisiz) bilan javob bering.\n\n" +
+      "JAVOB FORMATI (qat'iy shu tartibda):\n\n" +
+      "1-qator: 'Qon: ' bilan boshlanadigan bitta gaplik umumiy xulosa, sodda tilda " +
+      "(masalan: 'Qon: N ta ko'rsatkich tekshirilgan, ulardan M tasi me'yorda, K tasida me'yordan " +
+      "chetlashish bor.').\n\n" +
+      "Keyingi qatorlar: natijasi mavjud HAR BIR ko'rsatkich uchun bittadan qator, " +
+      "'- Ko'rsatkich nomi: natija (birlik) — holati, [chetlashsa qisqa sodda izoh]' formatida.\n\n" +
+      "Oxirgi qator: 'Tavsiya: ' bilan boshlanadigan bir gaplik amaliy tavsiya — bu tashxis emasligini " +
+      "va aniq baho uchun shifokorga murojaat qilish kerakligini eslatib, qaysi yo'nalishdagi shifokorga " +
+      "(masalan terapevt, gastroenterolog, nefrolog) borish maqsadga muvofiqligini ayting. Hech narsa " +
+      "chetlashmagan bo'lsa — shunchaki profilaktik ko'rikni davom ettirish tavsiyasini bering.";
+
+    const prompt =
+      `Quyidagi laboratoriya tahlil jadvalini diqqat bilan, aniqlikka rioya qilgan holda o'rganib chiqing. ` +
+      `Bemor topshirgan HAR BIR natijasi mavjud ko'rsatkichni to'liq, aniq va oddiy odam tushunadigan ` +
+      `sodda tilda tushuntiring. Bu tashxis emasligini yodda tuting:\n\n${extractedText}`;
 
     let analysisResult: string;
     let modelUsed: string;
@@ -225,8 +324,6 @@ export async function POST(req: NextRequest) {
       analysisResult = result.text;
       modelUsed = result.modelUsed;
     } catch (aiErr: any) {
-      // Ikkala model (asosiy va zaxira) ham javob berolmadi — server logida to'liq
-      // xatoni saqlaymiz, lekin laborantga tushunarli, qisqa xabar chiqaramiz.
       console.error("[AI] Ikkala model ham ishlamadi:", aiErr?.message);
       return NextResponse.json(
         {
@@ -239,8 +336,6 @@ export async function POST(req: NextRequest) {
 
     const bodyParagraphs = textToWordParagraphs(analysisResult);
 
-    // Shablon (Analiz_xulosasi_shablon.docx) bilan bir xil formatda:
-    // markazlashtirilgan qalin sarlavha + sz=28 li paragraflar, DIQQAT bloki eng pastda
     const xmlToInsert = `
       <w:p/>
       <w:p/>
@@ -287,21 +382,16 @@ export async function POST(req: NextRequest) {
             <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
             <w:sz w:val="20"/>
           </w:rPr>
-          <w:t>Ushbu tahlil xulosasi Sun'iy Intellekt (AI) tizimi tomonidan avtomatik ravishda tayyorlangan. Davolanish va aniq tashxis uchun mutaxassis shifokorga murojaat qiling.</w:t>
+          <w:t>Ushbu xulosa Sun'iy Intellekt (AI) tomonidan tayyorlangan va TASHXIS HISOBLANMAYDI — u faqat tahlil natijalarini tushunishga yordam beradi. Aniq baho va davolanish uchun albatta mutaxassis shifokorga murojaat qiling.</w:t>
         </w:r>
       </w:p>
     `;
 
-    // MUHIM: <w:sectPr> (sahifa/bo'lim sozlamalari) w:body ichidagi ENG OXIRGI element
-    // bo'lishi SHART (OOXML standarti). Agar yangi kontentni shundan keyin qo'shsak,
-    // fayl tuzilishi buziladi va Word uni tartibsiz/xato ko'rsatadi yoki "repair" qiladi.
-    // Shuning uchun kontentni sectPr'dan OLDIN joylashtiramiz.
     const sectPrRegex = /(<w:sectPr\b[^>]*\/>|<w:sectPr\b[^>]*>[\s\S]*?<\/w:sectPr>)(\s*<\/w:body>)/;
     let updatedXml: string;
     if (sectPrRegex.test(docXml)) {
       updatedXml = docXml.replace(sectPrRegex, `${xmlToInsert}$1$2`);
     } else {
-      // sectPr topilmasa (kamdan-kam holat), eski usulda body oxiriga qo'shamiz
       updatedXml = docXml.replace("</w:body>", `${xmlToInsert}</w:body>`);
     }
 
@@ -319,9 +409,6 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (err: any) {
-    // TUZATILDI: avval err.message to'g'ridan-to'g'ri klientga qaytarilardi — bu server
-    // ichki tuzilishi haqida keraksiz ma'lumot oshkor qilishi mumkin edi. Endi to'liq xato
-    // faqat serverda loglanadi, klientga esa umumiy va xavfsiz xabar boriladi.
     console.error("[process-lab] Kutilmagan xato:", err);
     return NextResponse.json(
       { error: "Faylni qayta ishlashda kutilmagan xatolik yuz berdi" },
