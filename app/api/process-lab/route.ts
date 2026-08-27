@@ -10,12 +10,14 @@ function escapeXml(text: string): string {
     .replace(/>/g, "&gt;");
 }
 
-// Bitta <w:r> (run) yaratadi
-function makeRun(text: string, bold: boolean): string {
+// Bitta <w:r> (run) yaratadi. `color` berilsa (masalan "C00000"), matn shu rangda chiqadi —
+// bu AI natijasi original hujjat bilan mos kelmagan qatorlarni belgilash uchun ishlatiladi.
+function makeRun(text: string, bold: boolean, color?: string): string {
   return `
     <w:r>
       <w:rPr>
         ${bold ? "<w:b/>" : ""}
+        ${color ? `<w:color w:val="${color}"/>` : ""}
         <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
         <w:sz w:val="28"/>
         <w:szCs w:val="28"/>
@@ -25,16 +27,49 @@ function makeRun(text: string, bold: boolean): string {
     </w:r>`;
 }
 
+// ---------- Raqamlarni solishtirish qatlami (aniqlikni oshirish uchun) ----------
+// Original jadval matnidan barcha raqamlarni (natija + norma qiymatlari) yig'ib olamiz.
+// AI qaytargan har bir qatordagi "natija" raqami shu to'plamda bor-yo'qligini tekshiramiz.
+// Bu AI hallyutsinatsiya qilib chiqargan (hujjatda umuman yo'q) raqamlarni ushlab qoladi.
+function extractNumbersFromText(text: string): Set<number> {
+  const matches = text.match(/-?\d+(?:[.,]\d+)?/g) || [];
+  const nums = new Set<number>();
+  for (const m of matches) {
+    const val = parseFloat(m.replace(",", "."));
+    if (!isNaN(val)) {
+      nums.add(Math.round(val * 1000) / 1000);
+    }
+  }
+  return nums;
+}
+
+function numberExistsIn(value: number, set: Set<number>, epsilon = 0.01): boolean {
+  const rounded = Math.round(value * 1000) / 1000;
+  if (set.has(rounded)) return true;
+  for (const n of set) {
+    if (Math.abs(n - rounded) < epsilon) return true;
+  }
+  return false;
+}
+
 // AI qaytargan matnni qatorlarga bo'lib, HAR BIR qatorni alohida Word paragraf qiladi.
 // Har qatorda ":" bo'lsa — ":" gacha bo'lgan qism (ko'rsatkich nomi) QALIN, qolgani oddiy yoziladi.
 // "- ", "* ", "1. " kabi belgi bilan boshlangan qatorlar bullet (•) va otstup bilan ajratiladi.
-function textToWordParagraphs(text: string): string {
+// originalNumbers berilsa, har bir qatordagi birinchi raqam original hujjatdagi raqamlar
+// to'plamida borligi tekshiriladi; mos kelmasa qator qizil rangda va ogohlantirish belgisi
+// bilan chiqadi, mismatchCount oshiriladi.
+function textToWordParagraphs(
+  text: string,
+  originalNumbers: Set<number>
+): { xml: string; mismatchCount: number } {
   const lines = text
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.length > 0);
 
-  return lines
+  let mismatchCount = 0;
+
+  const xml = lines
     .map((line) => {
       const isBullet = /^([-*•]|\d+[.)])\s+/.test(line);
       let cleanLine = line.replace(/^([-*•]|\d+[.)])\s+/, "").replace(/\*\*/g, "");
@@ -43,13 +78,30 @@ function textToWordParagraphs(text: string): string {
       const bulletPrefix = isBullet ? "•  " : "";
 
       const colonIdx = cleanLine.indexOf(":");
+
+      // Ushbu qatordagi "natija" raqamini topib, original hujjat bilan solishtiramiz
+      let isFlagged = false;
+      const numMatch = cleanLine.match(/:\s*(-?\d+(?:[.,]\d+)?)/);
+      if (numMatch) {
+        const val = parseFloat(numMatch[1].replace(",", "."));
+        if (!isNaN(val) && !numberExistsIn(val, originalNumbers)) {
+          isFlagged = true;
+          mismatchCount++;
+        }
+      }
+
+      const warnColor = isFlagged ? "C00000" : undefined;
+      const warnPrefix = isFlagged ? "⚠ [TEKSHIRING] " : "";
+
       let runs: string;
       if (colonIdx > -1 && colonIdx < 60) {
         const label = cleanLine.slice(0, colonIdx + 1);
         const rest = cleanLine.slice(colonIdx + 1);
-        runs = makeRun(bulletPrefix + label, true) + makeRun(rest, false);
+        runs =
+          makeRun(warnPrefix + bulletPrefix + label, true, warnColor) +
+          makeRun(rest, false, warnColor);
       } else {
-        runs = makeRun(bulletPrefix + cleanLine, false);
+        runs = makeRun(warnPrefix + bulletPrefix + cleanLine, false, warnColor);
       }
 
       return `
@@ -62,12 +114,18 @@ function textToWordParagraphs(text: string): string {
       </w:p>`;
     })
     .join("");
+
+  return { xml, mismatchCount };
 }
 
-// ---------- Asosiy model band bo'lsa, avtomatik zaxira modelga o'tish ----------
-
+// ---------- Model tanlash: asosiy band bo'lsa, avtomatik zaxira modelga o'tish ----------
+// PRIMARY sifatida gemini-3.6-flash qoldirildi — bu to'liq Flash daraja model bo'lib,
+// jadvaldagi raqamlarni bir-biriga chalkashtirmasdan diqqat bilan solishtirish kabi
+// aniqlik talab qiladigan vazifalar uchun flash-lite'dan ishonchliroq.
+// FALLBACK esa so'ralganidek gemini-3.5-flash-lite ga yangilandi (gemini-2.5-flash-lite
+// 2026-yil 16-oktabrda to'xtatiladi, shuning uchun yangiroq 3.x lite modelga o'tkazildi).
 const PRIMARY_MODEL = "gemini-3.6-flash";
-const FALLBACK_MODEL = "gemini-2.5-flash-lite";
+const FALLBACK_MODEL = "gemini-3.5-flash-lite";
 
 function isOverloadError(err: any): boolean {
   const status = err?.status ?? err?.response?.status;
@@ -124,9 +182,17 @@ async function generateWithFallback(
       AI_TIMEOUT_MS,
       PRIMARY_MODEL
     );
-    return { text: result.response.text().trim(), modelUsed: PRIMARY_MODEL };
+    const text = result.response.text().trim();
+    if (!text) {
+      throw new Error(`${PRIMARY_MODEL} bo'sh javob qaytardi (safety block bo'lishi mumkin)`);
+    }
+    return { text, modelUsed: PRIMARY_MODEL };
   } catch (err: any) {
-    if (!isOverloadError(err) && !String(err?.message).includes("vaqt limiti")) {
+    if (
+      !isOverloadError(err) &&
+      !String(err?.message).includes("vaqt limiti") &&
+      !String(err?.message).includes("bo'sh javob")
+    ) {
       throw err;
     }
 
@@ -143,7 +209,11 @@ async function generateWithFallback(
       AI_TIMEOUT_MS,
       FALLBACK_MODEL
     );
-    return { text: result.response.text().trim(), modelUsed: FALLBACK_MODEL };
+    const text = result.response.text().trim();
+    if (!text) {
+      throw new Error(`${FALLBACK_MODEL} ham bo'sh javob qaytardi`);
+    }
+    return { text, modelUsed: FALLBACK_MODEL };
   }
 }
 
@@ -206,7 +276,10 @@ export async function POST(req: NextRequest) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
-        { error: ".env.local faylida GEMINI_API_KEY topilmadi." },
+        {
+          error:
+            "GEMINI_API_KEY topilmadi. .env.local (local) yoki hosting muhitidagi environment variables (production) ni tekshiring.",
+        },
         { status: 500 }
       );
     }
@@ -274,6 +347,7 @@ export async function POST(req: NextRequest) {
     // AI'dan: (1) faqat aniq/berilgan ma'lumotga tayangan, (2) natijasi mavjud
     // HAR BIR ko'rsatkichni to'liq, (3) oddiy odam tushunadigan sodda tilda,
     // (4) tashxis emasligini ochiq aytadigan tahlil so'raladi.
+    // Aniqlikni oshirish uchun qo'shimcha "o'z-o'zini tekshirish" bosqichi kiritildi (7-band).
     const systemInstruction =
       "Siz tajribali laboratoriya shifokorisiz. Sizga jadval ko'rinishidagi laboratoriya tahlili " +
       "berilgan; har bir qator 'katakcha1 | katakcha2 | ...' formatida, odatda " +
@@ -300,7 +374,12 @@ export async function POST(req: NextRequest) {
       "Gaplarni cho'zmang, har bir qator bitta qisqa qatordan oshmasin.\n" +
       "5. Bu XULOSA TASHXIS EMASLIGINI hech qachon unutmang — faqat natijalarni tushuntirasiz, " +
       "kasallik nomini aytmaysiz yoki davolash tayinlamaysiz.\n" +
-      "6. Faqat oddiy matn (markdown, **, # belgilarisiz) bilan javob bering.\n\n" +
+      "6. Faqat oddiy matn (markdown, **, # belgilarisiz) bilan javob bering.\n" +
+      "7. YAKUNIY JAVOBNI YOZISHDAN OLDIN, o'zingiz ichingizda har bir qatorni original jadval bilan " +
+      "qayta solishtirib chiqing: natija qiymati original matndagi aynan o'sha ko'rsatkich qatoridan " +
+      "olinganini, boshqa ko'rsatkichning natijasi yoki normasi bilan almashtirib yubormaganingizni " +
+      "tekshiring. Faqat shu tekshiruvdan o'tgan, ishonchli qatorlarni yakuniy javobga kiriting. Bu ichki " +
+      "tekshiruv jarayonini javobda ko'rsatmang — faqat yakuniy, tekshirilgan natijani chiqaring.\n\n" +
       "JAVOB FORMATI (qat'iy shu tartibda):\n\n" +
       "1-qator: 'Qon: ' bilan boshlanadigan bitta gaplik umumiy xulosa, sodda tilda " +
       "(masalan: 'Qon: N ta ko'rsatkich tekshirilgan, ulardan M tasi me'yorda, K tasida me'yordan " +
@@ -334,7 +413,32 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const bodyParagraphs = textToWordParagraphs(analysisResult);
+    // AI natijasidagi raqamlarni original jadval matnidagi raqamlar bilan solishtiramiz
+    const originalNumbers = extractNumbersFromText(extractedText);
+    const { xml: bodyParagraphs, mismatchCount } = textToWordParagraphs(
+      analysisResult,
+      originalNumbers
+    );
+
+    const mismatchWarningXml =
+      mismatchCount > 0
+        ? `
+      <w:p/>
+      <w:p>
+        <w:pPr>
+          <w:jc w:val="left"/>
+        </w:pPr>
+        <w:r>
+          <w:rPr>
+            <w:b/>
+            <w:color w:val="C00000"/>
+            <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+            <w:sz w:val="22"/>
+          </w:rPr>
+          <w:t xml:space="preserve">⚠ Avtomatik tekshiruv: ${mismatchCount} ta qatordagi raqam original hujjatdagi qiymatlar bilan aniq mos kelmadi (yuqorida qizil rangda belgilangan). Iltimos, ularni qo'lda tekshiring.</w:t>
+        </w:r>
+      </w:p>`
+        : "";
 
     const xmlToInsert = `
       <w:p/>
@@ -356,6 +460,7 @@ export async function POST(req: NextRequest) {
       </w:p>
       <w:p/>
       ${bodyParagraphs}
+      ${mismatchWarningXml}
       <w:p/>
       <w:p/>
       <w:p>
@@ -406,6 +511,7 @@ export async function POST(req: NextRequest) {
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "Content-Disposition": `attachment; filename="${encodedFilename}"; filename*=UTF-8''${encodedFilename}`,
         "X-AI-Model-Used": modelUsed,
+        "X-AI-Mismatch-Count": String(mismatchCount),
       },
     });
   } catch (err: any) {
