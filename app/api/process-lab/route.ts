@@ -68,8 +68,15 @@ function textToWordParagraphs(text: string): string {
 // ---------- Asosiy model band bo'lsa, avtomatik zaxira modelga o'tish ----------
 
 const PRIMARY_MODEL = "gemini-3.6-flash";
+// TUZATILDI: eski "gemini-1.5-flash" allaqachon butunlay o'chirilgan (har doim 404 qaytaradi),
+// shuning uchun zaxira sifatida ishlamas edi. O'rniga hozirgi barqaror va BEPUL (free-tier)
+// "gemini-2.5-flash-lite" modeli qo'yildi.
 const FALLBACK_MODEL = "gemini-2.5-flash-lite";
 
+// TUZATILDI: avval faqat 429/503 (band bo'lish) holatlarini "overload" deb hisoblardi.
+// Agar asosiy model nomi noto'g'ri bo'lib qolsa yoki o'chirilgan bo'lsa, API odatda 404/
+// "not found" xatosi qaytaradi — bu ilgari umuman ushlanmas va fallback ishga tushmas edi.
+// Endi bunday holatlar ham fallbackni ishga tushiradi.
 function isOverloadError(err: any): boolean {
   const status = err?.status ?? err?.response?.status;
   const message = String(err?.message || "").toLowerCase();
@@ -105,7 +112,7 @@ async function generateWithFallback(
     return { text: result.response.text().trim(), modelUsed: PRIMARY_MODEL };
   } catch (err: any) {
     if (!isOverloadError(err)) {
-      throw err;
+      throw err; // boshqa turdagi xato — fallback yordam bermaydi, to'g'ridan-to'g'ri uloqtiramiz
     }
 
     console.warn(
@@ -121,145 +128,18 @@ async function generateWithFallback(
   }
 }
 
-// TUZATILDI: avval barcha <w:t> matnlar bitta qatorga bo'shliq bilan
-// qo'shib yuborilardi — jadval qator/ustun chegaralari yo'qolib, AI
-// natija va norma qiymatlarini noto'g'ri bog'lashi (yoki ba'zi
-// ko'rsatkichlarni butunlay o'tkazib yuborishi) mumkin edi.
-// Endi har bir jadval qatori (<w:tr>) alohida qatorga chiqariladi va
-// katakchalar " | " bilan ajratiladi — shunda "Ko'rsatkich | Natija |
-// Norma | birlik" tuzilishi saqlanib, AI aniq mos qiladi.
+// TUZATILDI: DOCX dan matn ajratib olishda endi "o'chirilgan" (Track Changes -> w:del)
+// qatorlar hisobga olinmaydi. Avval oddiy regex <w:del> ichidagi matnni ham ushlab olar
+// va bemor tahliliga aloqasi bo'lmagan/o'chirilgan matn AI'ga yuborilar edi.
 function extractTextFromDocumentXml(docXml: string): string {
   const withoutDeletedRuns = docXml.replace(/<w:del\b[^>]*>[\s\S]*?<\/w:del>/g, "");
-
-  // Jadval qatorlari bo'lsa — har birini alohida qator qilib chiqaramiz
-  const rows = withoutDeletedRuns.match(/<w:tr\b[\s\S]*?<\/w:tr>/g);
-  if (rows && rows.length > 0) {
-    const lines = rows.map((row) => {
-      // Har bir katakcha (<w:tc>) ichidagi matnni yig'ib, katakchalarni " | " bilan ajratamiz
-      const cells = row.match(/<w:tc\b[\s\S]*?<\/w:tc>/g) || [];
-      const cellTexts = cells.map((cell) => {
-        const tMatches = cell.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
-        return tMatches
-          .map((t) => t.replace(/<[^>]+>/g, ""))
-          .join("")
-          .trim();
-      });
-      return cellTexts.filter((c) => c.length > 0).join(" | ");
-    });
-    const tableText = lines.filter((l) => l.length > 0).join("\n");
-
-    // Jadvaldan tashqaridagi matn (sarlavha, F.I.O, sana kabi) ham kerak bo'lishi mumkin
-    const withoutTables = withoutDeletedRuns.replace(/<w:tbl\b[\s\S]*?<\/w:tbl>/g, "\n");
-    const outsideMatches = withoutTables.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
-    const outsideText = outsideMatches.map((t) => t.replace(/<[^>]+>/g, "")).join(" ").trim();
-
-    return `${outsideText}\n\n${tableText}`.trim();
-  }
-
-  // Jadval topilmasa — eski usul bo'yicha
   const textMatches = withoutDeletedRuns.match(/<w:t[^>]*>(.*?)<\/w:t>/g) || [];
   return textMatches.map((t) => t.replace(/<[^>]+>/g, "")).join(" ");
 }
 
+// Ruxsat etilgan maksimal fayl hajmi (MB). Serverga haddan tashqari katta yoki
+// soxta fayl yuklanishining oldini olish uchun.
 const MAX_FILE_SIZE_MB = 15;
-
-// ---------- Footer (DIQQAT / OGOHLANTIRISH) — har doim sahifa pastida ----------
-
-const FOOTER_REL_ID = "rIdFooterAI";
-
-function buildFooterXml(): string {
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-  <w:p>
-    <w:pPr><w:jc w:val="center"/></w:pPr>
-    <w:r>
-      <w:rPr>
-        <w:b/>
-        <w:color w:val="FF5555"/>
-        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
-        <w:sz w:val="22"/>
-      </w:rPr>
-      <w:t>DIQQAT / OGOHLANTIRISH:</w:t>
-    </w:r>
-  </w:p>
-  <w:p>
-    <w:pPr><w:jc w:val="center"/></w:pPr>
-    <w:r>
-      <w:rPr>
-        <w:color w:val="FF5555"/>
-        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
-        <w:sz w:val="20"/>
-      </w:rPr>
-      <w:t>Ushbu tahlil xulosasi Sun'iy Intellekt (AI) tizimi tomonidan avtomatik ravishda tayyorlangan. Davolanish va aniq tashxis uchun mutaxassis shifokorga murojaat qiling.</w:t>
-    </w:r>
-  </w:p>
-</w:ftr>`;
-}
-
-// footer1.xml ni zip'ga qo'shadi, Content_Types va rels'ni yangilaydi,
-// va sectPr ichiga footerReference qo'yadi. Yangilangan document.xml qaytaradi.
-async function attachFooter(zip: JSZip, docXml: string): Promise<string> {
-  // 1) footer1.xml
-  zip.file("word/footer1.xml", buildFooterXml());
-
-  // 2) [Content_Types].xml — Override yozuvi
-  const contentTypesPath = "[Content_Types].xml";
-  const contentTypesFile = zip.file(contentTypesPath);
-  if (contentTypesFile) {
-    let contentTypesXml = await contentTypesFile.async("string");
-    if (!contentTypesXml.includes("/word/footer1.xml")) {
-      contentTypesXml = contentTypesXml.replace(
-        "</Types>",
-        `<Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/></Types>`
-      );
-      zip.file(contentTypesPath, contentTypesXml);
-    }
-  }
-
-  // 3) word/_rels/document.xml.rels — relationship
-  const relsPath = "word/_rels/document.xml.rels";
-  const relsFile = zip.file(relsPath);
-  if (relsFile) {
-    let relsXml = await relsFile.async("string");
-    if (!relsXml.includes(FOOTER_REL_ID)) {
-      relsXml = relsXml.replace(
-        "</Relationships>",
-        `<Relationship Id="${FOOTER_REL_ID}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/></Relationships>`
-      );
-      zip.file(relsPath, relsXml);
-    }
-  }
-
-  // 4) document.xml ichida xmlns:r borligini ta'minlash (r:id ishlashi uchun shart)
-  let updatedXml = docXml;
-  if (!/xmlns:r="/.test(updatedXml)) {
-    updatedXml = updatedXml.replace(
-      "<w:document ",
-      `<w:document xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" `
-    );
-  }
-
-  // 5) sectPr ichiga footerReference qo'shish
-  const footerRef = `<w:footerReference w:type="default" r:id="${FOOTER_REL_ID}"/>`;
-  if (updatedXml.includes(FOOTER_REL_ID)) {
-    // allaqachon qo'shilgan bo'lsa, qayta qo'shmaymiz
-    return updatedXml;
-  }
-
-  const sectPrSelfClosing = /<w:sectPr\b([^>]*)\/>/;
-  const sectPrOpenTag = /<w:sectPr\b([^>]*)>/;
-
-  if (sectPrSelfClosing.test(updatedXml)) {
-    updatedXml = updatedXml.replace(sectPrSelfClosing, `<w:sectPr$1>${footerRef}</w:sectPr>`);
-  } else if (sectPrOpenTag.test(updatedXml)) {
-    updatedXml = updatedXml.replace(sectPrOpenTag, `$&${footerRef}`);
-  } else {
-    // sectPr umuman topilmasa — juda kamdan-kam holat, footer qo'shib bo'lmaydi
-    console.warn("[attachFooter] sectPr topilmadi, footer qo'shilmadi.");
-  }
-
-  return updatedXml;
-}
 
 export async function POST(req: NextRequest) {
   try {
@@ -276,6 +156,9 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const file = formData.get("file");
 
+    // TUZATILDI: avval "file" maydoni to'g'ridan-to'g'ri File deb hisoblanardi.
+    // Agar maydon umuman kelmasa yoki boshqa turda bo'lsa, keyinroq tushunarsiz
+    // xato chiqar edi. Endi aniq va tushunarli tekshiruv qo'yildi.
     if (!file || !(file instanceof File)) {
       return NextResponse.json({ error: "Fayl tanlanmadi" }, { status: 400 });
     }
@@ -322,32 +205,18 @@ export async function POST(req: NextRequest) {
     }
 
     const systemInstruction =
-      "Siz tajribali laboratoriya shifokorisiz. Sizga jadval ko'rinishidagi laboratoriya tahlili " +
-      "berilgan; har bir qator 'katakcha1 | katakcha2 | ... ' formatida, odatda " +
-      "'Ko'rsatkich nomi | Natija | Norma | O'lchov birligi' tartibida keladi.\n\n" +
-      "QOIDALAR:\n" +
-      "1. Faqat NATIJA QIYMATI ko'rsatilgan (bo'sh bo'lmagan) ko'rsatkichlarni tahlil qiling. " +
-      "Natija katakchasi bo'sh bo'lsa (o'lchov o'tkazilmagan), o'sha ko'rsatkichni butunlay o'tkazib yuboring — " +
-      "u haqida hech narsa yozmang.\n" +
-      "2. HAR BIR natijasi mavjud ko'rsatkich uchun ALOHIDA qator yozing — birortasini ham tashlab ketmang, " +
-      "birortasini ham birlashtirmang.\n" +
-      "3. Har bir qatorda: ko'rsatkich nomi, natija qiymati, me'yor bilan solishtirilgan holati " +
-      "(me'yorda / me'yordan yuqori / me'yordan past), va agar chetlashish bo'lsa — 5-10 so'zli " +
-      "juda qisqa tibbiy izoh. Me'yorda bo'lsa qo'shimcha izoh shart emas — shunchaki 'me'yorda' deb yozing.\n" +
-      "4. Tilni sodda va tushunarli tuting — bemor ham o'qib tushunadigan darajada, ortiqcha " +
-      "tibbiy jargon ishlatmang, gaplarni cho'zmang.\n" +
-      "5. Faqat oddiy matn (markdown, **, # belgilarisiz) bilan javob bering.\n\n" +
-      "JAVOB FORMATI (qat'iy shu tartibda):\n\n" +
-      "1-qator: 'Qon: ' bilan boshlanadigan bitta gaplik juda qisqa umumiy xulosa " +
-      "(masalan: 'Qon: O'lchangan ko'rsatkichlarning ko'pchiligi me'yorda, N ta ko'rsatkichda chetlashish bor.').\n\n" +
-      "Keyingi qatorlar: natijasi mavjud HAR BIR ko'rsatkich uchun bittadan qator, " +
-      "'- Ko'rsatkich nomi: natija (birlik) — holati, [chetlashsa qisqa izoh]' formatida.\n\n" +
-      "Oxirgi qator: 'Tavsiya: ' bilan boshlanadigan bir gaplik amaliy tavsiya " +
-      "(qaysi shifokorga murojaat qilish kerakligi, faqat chetlashishlar asosida).\n\n" +
-      "Ko'rsatkich nomlarini aniq va tibbiy jihatdan to'g'ri yozing, taxmin qilmang — faqat berilgan " +
-      "ma'lumotlarga tayaning.";
+      "Siz tajribali laboratoriya shifokorisisiz. Berilgan laboratoriya tahlili natijalarini o'rganib, " +
+      "quyidagi QAT'IY formatda, faqat oddiy matn ko'rinishida (markdown, **, # belgilarisiz) javob bering:\n\n" +
+      "1-qator: Umumiy xulosa — 'Qon: ' bilan boshlanadigan bitta-ikkita gapli umumiy baho " +
+      "(masalan: 'Qon: Qonning biokimyoviy tahlili natijalariga ko'ra, asosiy ko'rsatkichlar me'yorda bo'lib, faqat X ko'rsatkichida chetlashish aniqlandi.').\n\n" +
+      "Keyingi qatorlar: me'yordan chetlashgan yoki alohida e'tibor talab qiladigan HAR BIR ko'rsatkich uchun " +
+      "ALOHIDA QATORDAN boshlab, '- Ko'rsatkich nomi: natija qiymati, me'yor bilan solishtirilgan holda, qisqa tibbiy izoh' " +
+      "formatida yozing. Nechta ko'rsatkich chetlashgan yoki muhim bo'lsa, shunchasini alohida qatorda bering — " +
+      "hech birini birlashtirmang.\n\n" +
+      "Oxirgi qator: 'Tavsiya: ' bilan boshlanadigan qisqa amaliy tavsiya (qaysi shifokorga murojaat qilish kerakligi).\n\n" +
+      "Har bir ko'rsatkich nomini aniq va tibbiy jihatdan to'g'ri yozing, taxmin qilmang — faqat berilgan ma'lumotlarga tayaning.";
 
-    const prompt = `Quyidagi laboratoriya tahlil jadvalini o'rganib chiqib, yuqoridagi qoida va formatga qat'iy rioya qilgan holda, HAR BIR natijasi mavjud ko'rsatkichni alohida tahlil qilib, aniq va qisqa xulosa yozing:\n\n${extractedText}`;
+    const prompt = `Quyidagi laboratoriya tahlil natijasini o'rganib chiqib, yuqorida ko'rsatilgan formatga qat'iy rioya qilgan holda xulosa yozing:\n\n${extractedText}`;
 
     let analysisResult: string;
     let modelUsed: string;
@@ -356,6 +225,8 @@ export async function POST(req: NextRequest) {
       analysisResult = result.text;
       modelUsed = result.modelUsed;
     } catch (aiErr: any) {
+      // Ikkala model (asosiy va zaxira) ham javob berolmadi — server logida to'liq
+      // xatoni saqlaymiz, lekin laborantga tushunarli, qisqa xabar chiqaramiz.
       console.error("[AI] Ikkala model ham ishlamadi:", aiErr?.message);
       return NextResponse.json(
         {
@@ -368,10 +239,8 @@ export async function POST(req: NextRequest) {
 
     const bodyParagraphs = textToWordParagraphs(analysisResult);
 
-    // Endi faqat sarlavha + tahlil matni qo'shiladi.
-    // DIQQAT / OGOHLANTIRISH matni footer'ga ko'chirildi — shu sababli u
-    // tahlil matni qisqa yoki uzun bo'lishidan qat'iy nazar, har doim
-    // sahifaning eng pastida (footer sifatida) chiqadi.
+    // Shablon (Analiz_xulosasi_shablon.docx) bilan bir xil formatda:
+    // markazlashtirilgan qalin sarlavha + sz=28 li paragraflar, DIQQAT bloki eng pastda
     const xmlToInsert = `
       <w:p/>
       <w:p/>
@@ -392,21 +261,49 @@ export async function POST(req: NextRequest) {
       </w:p>
       <w:p/>
       ${bodyParagraphs}
+      <w:p/>
+      <w:p/>
+      <w:p>
+        <w:pPr>
+          <w:jc w:val="center"/>
+        </w:pPr>
+        <w:r>
+          <w:rPr>
+            <w:b/>
+            <w:color w:val="FF5555"/>
+            <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+            <w:sz w:val="22"/>
+          </w:rPr>
+          <w:t>DIQQAT / OGOHLANTIRISH:</w:t>
+        </w:r>
+      </w:p>
+      <w:p>
+        <w:pPr>
+          <w:jc w:val="center"/>
+        </w:pPr>
+        <w:r>
+          <w:rPr>
+            <w:color w:val="FF5555"/>
+            <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+            <w:sz w:val="20"/>
+          </w:rPr>
+          <w:t>Ushbu tahlil xulosasi Sun'iy Intellekt (AI) tizimi tomonidan avtomatik ravishda tayyorlangan. Davolanish va aniq tashxis uchun mutaxassis shifokorga murojaat qiling.</w:t>
+        </w:r>
+      </w:p>
     `;
 
-    // MUHIM: <w:sectPr> w:body ichidagi ENG OXIRGI element bo'lishi SHART
-    // (OOXML standarti). Shuning uchun kontentni sectPr'dan OLDIN joylashtiramiz.
+    // MUHIM: <w:sectPr> (sahifa/bo'lim sozlamalari) w:body ichidagi ENG OXIRGI element
+    // bo'lishi SHART (OOXML standarti). Agar yangi kontentni shundan keyin qo'shsak,
+    // fayl tuzilishi buziladi va Word uni tartibsiz/xato ko'rsatadi yoki "repair" qiladi.
+    // Shuning uchun kontentni sectPr'dan OLDIN joylashtiramiz.
     const sectPrRegex = /(<w:sectPr\b[^>]*\/>|<w:sectPr\b[^>]*>[\s\S]*?<\/w:sectPr>)(\s*<\/w:body>)/;
     let updatedXml: string;
     if (sectPrRegex.test(docXml)) {
       updatedXml = docXml.replace(sectPrRegex, `${xmlToInsert}$1$2`);
     } else {
+      // sectPr topilmasa (kamdan-kam holat), eski usulda body oxiriga qo'shamiz
       updatedXml = docXml.replace("</w:body>", `${xmlToInsert}</w:body>`);
     }
-
-    // Ogohlantirish matnini footer sifatida bog'laymiz — shu bilan u
-    // sahifaning eng pastida, kontent hajmidan qat'iy nazar, doim ko'rinadi.
-    updatedXml = await attachFooter(zip, updatedXml);
 
     zip.file("word/document.xml", updatedXml);
     const modifiedBuffer = await zip.generateAsync({ type: "uint8array" });
@@ -422,6 +319,9 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (err: any) {
+    // TUZATILDI: avval err.message to'g'ridan-to'g'ri klientga qaytarilardi — bu server
+    // ichki tuzilishi haqida keraksiz ma'lumot oshkor qilishi mumkin edi. Endi to'liq xato
+    // faqat serverda loglanadi, klientga esa umumiy va xavfsiz xabar boriladi.
     console.error("[process-lab] Kutilmagan xato:", err);
     return NextResponse.json(
       { error: "Faylni qayta ishlashda kutilmagan xatolik yuz berdi" },
